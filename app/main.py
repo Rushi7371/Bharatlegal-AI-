@@ -21,31 +21,61 @@ class DraftRequest(BaseModel):
 
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
-def get_client():
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        return None
-    try:
-        from openai import OpenAI
-        return OpenAI(api_key=key, base_url=os.getenv("OPENAI_BASE_URL") or None)
-    except Exception:
-        return None
-
 def ask_model(prompt: str):
-    client = get_client()
-    if client is None:
-        raise HTTPException(status_code=503, detail="AI is not connected. Add OPENAI_API_KEY to the .env file and restart the server. The demo interface is available without a key.")
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-    try:
-        response = client.responses.create(model=model, instructions=SYSTEM, input=prompt)
-        return response.output_text
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI provider request failed: {str(exc)[:240]}")
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
 
+    try:
+        if gemini_key:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=gemini_key)
+            response = client.models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM
+                ),
+            )
+            if not response.text:
+                raise RuntimeError("Gemini returned an empty response.")
+            return response.text
+
+        if openai_key:
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=openai_key,
+                base_url=os.getenv("OPENAI_BASE_URL") or None
+            )
+            response = client.responses.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                instructions=SYSTEM,
+                input=prompt
+            )
+            return response.output_text
+
+        raise HTTPException(
+            status_code=503,
+            detail="Add GEMINI_API_KEY or OPENAI_API_KEY in Railway Variables."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI provider request failed: {str(exc)[:240]}"
+        )
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "product": "BharatLegal AI", "ai_connected": bool(os.getenv("OPENAI_API_KEY")), "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None}
-
+    return {
+    "status": "ok",
+    "product": "BharatLegal AI",
+    "ai_connected": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")),
+    "provider": "Gemini" if os.getenv("GEMINI_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else None),
+    "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash") if os.getenv("GEMINI_API_KEY") else (os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None)
+}
 @app.get("/api/maharashtra/sources")
 def maharashtra_sources():
     """Return the curated Maharashtra legal/public-source catalogue. Not an indexed corpus."""
