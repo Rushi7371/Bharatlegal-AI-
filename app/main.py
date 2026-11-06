@@ -135,4 +135,8 @@ def draft(body: DraftRequest):
     prompt = f"Draft type: {body.document_type}\nJurisdiction: {body.jurisdiction}\nTone: {body.tone}\nFacts and instructions: {body.facts}\n\nPrepare a working draft with clear headings and bracketed placeholders for missing details. Do not invent facts, statutory citations or case law. Finish with a verification checklist for an Indian advocate."
     return {"draft": ask_model(prompt)}
 
-@app.get("/mobile", include_in_schema=False)\ndef mobile_redirect():\n    return RedirectResponse(url="/mobile/", status_code=307)\n\napp.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
+@app.get("/mobile", include_in_schema=False)
+def mobile_redirect():
+    return RedirectResponse(url="/mobile/", status_code=307)
+
+app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
