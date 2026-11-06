@@ -1,0 +1,20 @@
+{
+  "id": "/mobile/",
+  "name": "BharatLegal AI Mobile",
+  "short_name": "BharatLegal",
+  "description": "India-focused legal research and drafting assistant",
+  "start_url": "/mobile/",
+  "scope": "/mobile/",
+  "display": "standalone",
+  "background_color": "#f3f6fa",
+  "theme_color": "#10213b",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/mobile/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
