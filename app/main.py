@@ -24,9 +24,16 @@ SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting
 def ask_model(prompt: str):
     gemini_key = os.getenv("GEMINI_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
+    errors = []
 
-    try:
-        if gemini_key:
+    if not gemini_key and not openai_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Configure GEMINI_API_KEY or OPENAI_API_KEY in Railway."
+        )
+
+    if gemini_key:
+        try:
             from google import genai
             from google.genai import types
 
@@ -38,35 +45,43 @@ def ask_model(prompt: str):
                     system_instruction=SYSTEM
                 ),
             )
-            if not response.text:
-                raise RuntimeError("Gemini returned an empty response.")
-            return response.text
+            if response.text and response.text.strip():
+                return response.text
 
-        if openai_key:
+            errors.append("Gemini returned an empty response.")
+
+        except Exception as exc:
+            errors.append(f"Gemini: {type(exc).__name__}: {str(exc)[:150]}")
+
+    if openai_key:
+        try:
             from openai import OpenAI
+
             client = OpenAI(
                 api_key=openai_key,
-                base_url=os.getenv("OPENAI_BASE_URL") or None
+                base_url=os.getenv("OPENAI_BASE_URL") or None,
+                timeout=45.0,
+                max_retries=1
             )
             response = client.responses.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
                 instructions=SYSTEM,
                 input=prompt
             )
-            return response.output_text
 
-        raise HTTPException(
-            status_code=503,
-            detail="Add GEMINI_API_KEY or OPENAI_API_KEY in Railway Variables."
-        )
+            if response.output_text and response.output_text.strip():
+                return response.output_text
 
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI provider request failed: {str(exc)[:240]}"
-        )
+            errors.append("OpenAI returned an empty response.")
+
+        except Exception as exc:
+            errors.append(f"OpenAI: {type(exc).__name__}: {str(exc)[:150]}")
+
+    raise HTTPException(
+        status_code=502,
+        detail="All configured AI providers failed. " + " | ".join(errors)
+    )
+       
 @app.get("/api/health")
 def health():
     return {
