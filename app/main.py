@@ -33,8 +33,10 @@ def ask_model(prompt: str):
             from google import genai
             from google.genai import types
             client = genai.Client(api_key=gemini_key, http_options={"timeout": 30000})
-            configured = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            models = [configured] + (["gemini-2.5-flash-lite"] if configured != "gemini-2.5-flash-lite" else [])
+            configured = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+            # Use currently supported stable fallback models. Gemini 2.5 Flash-Lite
+            # was retired on 20 Oct 2026 and must not be used as a fallback.
+            models = list(dict.fromkeys([configured, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]))
             for model in models:
                 for attempt in range(2):
                     try:
