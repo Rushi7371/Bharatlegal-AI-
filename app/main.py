@@ -25,63 +25,50 @@ def ask_model(prompt: str):
     gemini_key = os.getenv("GEMINI_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
     errors = []
-
     if not gemini_key and not openai_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Configure GEMINI_API_KEY or OPENAI_API_KEY in Railway."
-        )
+        raise HTTPException(status_code=503, detail="Configure GEMINI_API_KEY or OPENAI_API_KEY in Railway.")
 
     if gemini_key:
         try:
             from google import genai
             from google.genai import types
-
-            client = genai.Client(api_key=gemini_key)
-            response = client.models.generate_content(
-                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM
-                ),
-            )
-            if response.text and response.text.strip():
-                return response.text
-
-            errors.append("Gemini returned an empty response.")
-
+            client = genai.Client(api_key=gemini_key, http_options={"timeout": 30000})
+            configured = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            models = [configured] + (["gemini-2.5-flash-lite"] if configured != "gemini-2.5-flash-lite" else [])
+            for model in models:
+                for attempt in range(2):
+                    try:
+                        response = client.models.generate_content(model=model, contents=prompt, config=types.GenerateContentConfig(system_instruction=SYSTEM))
+                        if response.text and response.text.strip():
+                            return response.text
+                        errors.append(f"Gemini {model}: empty response")
+                        break
+                    except Exception as exc:
+                        msg = str(exc)[:180]
+                        errors.append(f"Gemini {model}: {type(exc).__name__}: {msg}")
+                        temporary = "503" in msg or "UNAVAILABLE" in msg or "high demand" in msg.lower()
+                        if attempt == 0 and temporary:
+                            import time
+                            time.sleep(1.2)
+                            continue
+                        break
         except Exception as exc:
-            errors.append(f"Gemini: {type(exc).__name__}: {str(exc)[:150]}")
+            errors.append(f"Gemini setup: {type(exc).__name__}: {str(exc)[:180]}")
 
     if openai_key:
         try:
             from openai import OpenAI
-
-            client = OpenAI(
-                api_key=openai_key,
-                base_url=os.getenv("OPENAI_BASE_URL") or None,
-                timeout=45.0,
-                max_retries=1
-            )
-            response = client.responses.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-                instructions=SYSTEM,
-                input=prompt
-            )
-
+            client = OpenAI(api_key=openai_key, base_url=os.getenv("OPENAI_BASE_URL") or None, timeout=60.0, max_retries=2)
+            response = client.responses.create(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), instructions=SYSTEM, input=prompt)
             if response.output_text and response.output_text.strip():
                 return response.output_text
-
             errors.append("OpenAI returned an empty response.")
-
         except Exception as exc:
-            errors.append(f"OpenAI: {type(exc).__name__}: {str(exc)[:150]}")
+            errors.append(f"OpenAI: {type(exc).__name__}: {str(exc)[:220]}")
 
-    raise HTTPException(
-        status_code=502,
-        detail="All configured AI providers failed. " + " | ".join(errors)
-    )
-       
+    raise HTTPException(status_code=502, detail="AI services are temporarily unavailable. " + " || ".join(errors) + " Please retry shortly. If this continues, check the provider API key, quota and model access in Railway.")
+
+
 @app.get("/api/health")
 def health():
     return {
