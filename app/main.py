@@ -13,7 +13,6 @@ class ChatRequest(BaseModel):
     message: str
     practice_area: str = "General"
     language: str = "English"
-    language: str = "English"
 
 class DraftRequest(BaseModel):
     document_type: str
@@ -85,7 +84,7 @@ def health():
     "product": "BharatLegal AI",
     "ai_connected": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")),
     "provider": "Gemini" if os.getenv("GEMINI_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else None),
-    "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash") if os.getenv("GEMINI_API_KEY") else (os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None)
+    "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash") if os.getenv("GEMINI_API_KEY") else (os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None)
 }
 @app.get("/api/maharashtra/sources")
 def maharashtra_sources():
