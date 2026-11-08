@@ -12,16 +12,21 @@ app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focuse
 class ChatRequest(BaseModel):
     message: str
     practice_area: str = "General"
+    language: str = "English"
 
 class DraftRequest(BaseModel):
     document_type: str
     facts: str
     jurisdiction: str = "India"
     tone: str = "Formal"
+    language: str = "English"
 
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
-def ask_model(prompt: str):
+def ask_model(prompt: str, language: str = "English"):
+    allowed = {"English": "English", "Hindi": "Hindi (हिन्दी)", "Marathi": "Marathi (मराठी)"}
+    selected = allowed.get(language, "English")
+    prompt += f"\n\nRESPONSE LANGUAGE: Write the complete user-facing response in {selected}. Keep statute titles, section numbers, case names and official citations in their authoritative original form; explain them in the selected language. Do not alter legal citations. Draft documents in the selected language. If a translation is uncertain, retain the original legal wording and explain the uncertainty."
     gemini_key = os.getenv("GEMINI_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
     errors = []
@@ -96,10 +101,10 @@ def chat(body: ChatRequest):
     if not body.message.strip():
         raise HTTPException(400, "Enter a question.")
     prompt = f"Practice area: {body.practice_area}\\nUser question: {body.message}\\n\\nFor criminal-law issues, explain that the date of alleged conduct determines whether IPC or BNS applies; ask for the date if missing. For conduct on/after 1 July 2024, analyze under BNS where applicable; for earlier conduct, consider IPC and repeal-and-savings rules. When comparing IPC 420 and IPC 406, distinguish cheating from criminal breach of trust. Map IPC 420 to BNS section 318(4) only where its ingredients are met; explicitly state that BNS section 319 is cheating by personation and is NOT the equivalent of IPC 420. Map IPC 406 to the applicable provision in BNS section 316, identifying the precise subsection only after checking the conduct and statutory text. Never list BNS 318 and 319 together as IPC 420 equivalents. Answer with: (1) concise response, (2) comparison table if useful, (3) applicable-date caveat and legal framework, (4) practical next steps, (5) uncertainties and official sources to consult. Do not fabricate citations."
-    return {"answer": ask_model(prompt)}
+    return {"answer": ask_model(prompt, body.language)}
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...), question: str = Form("Summarise this document, identify issues, obligations, dates, risks and missing information.")):
+async def analyze(file: UploadFile = File(...), question: str = Form("Summarise this document, identify issues, obligations, dates, risks and missing information."), language: str = Form("English")):
     name = (file.filename or "document").lower()
     data = await file.read()
     if len(data) > 12 * 1024 * 1024:
@@ -126,14 +131,14 @@ async def analyze(file: UploadFile = File(...), question: str = Form("Summarise 
         raise HTTPException(422, "No readable text found. Scanned PDFs require OCR, which is not included in this MVP.")
     text = text[:60000]
     prompt = f"User's requested analysis: {question}\n\nDOCUMENT TEXT (may be incomplete):\n{text}\n\nProvide a structured analysis. Quote short snippets only when useful. Separate facts stated in the document from your interpretation. Identify missing clauses/facts and do not invent legal authorities."
-    return {"filename": file.filename, "characters_reviewed": len(text), "analysis": ask_model(prompt)}
+    return {"filename": file.filename, "characters_reviewed": len(text), "analysis": ask_model(prompt, language)}
 
 @app.post("/api/draft")
 def draft(body: DraftRequest):
     if not body.facts.strip():
         raise HTTPException(400, "Provide the facts and drafting instructions.")
     prompt = f"Draft type: {body.document_type}\nJurisdiction: {body.jurisdiction}\nTone: {body.tone}\nFacts and instructions: {body.facts}\n\nPrepare a working draft with clear headings and bracketed placeholders for missing details. Do not invent facts, statutory citations or case law. Finish with a verification checklist for an Indian advocate."
-    return {"draft": ask_model(prompt)}
+    return {"draft": ask_model(prompt, body.language)}
 
 @app.get("/mobile", include_in_schema=False)
 def mobile_redirect():
