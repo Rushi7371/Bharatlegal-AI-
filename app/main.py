@@ -85,6 +85,47 @@ def health():
     "provider": "Gemini" if os.getenv("GEMINI_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else None),
     "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash") if os.getenv("GEMINI_API_KEY") else (os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None)
 }
+
+@app.get("/api/draft/requirements")
+def draft_requirements(document_type: str, jurisdiction: str):
+    """Return a drafting intake checklist, not a statement of prescribed court forms or local filing rules."""
+    if not jurisdiction.strip():
+        raise HTTPException(400, "Select a State, Union Territory or central jurisdiction.")
+    common = [
+        {"id": "parties", "label": "Full legal names and roles of all parties", "required_for_draft": True},
+        {"id": "addresses", "label": "Current addresses for correspondence / service", "required_for_draft": True},
+        {"id": "facts_dates", "label": "Chronology of material events with dates", "required_for_draft": True},
+        {"id": "relief", "label": "Specific relief, response or outcome requested", "required_for_draft": True},
+        {"id": "documents", "label": "Supporting documents and annexures (or state none)", "required_for_draft": False},
+        {"id": "forum", "label": "Proposed court, tribunal or authority, if known", "required_for_draft": False},
+    ]
+    specific = {
+        "Legal notice": ["Legal basis and relevant contract / transaction", "Breach or grievance and demand", "Time allowed for compliance (verify before use)"],
+        "Reply to legal notice": ["Date and complete copy of notice", "Point-by-point response and admissions / denials", "Documents supporting the response"],
+        "Affidavit": ["Deponent identity and capacity", "Facts within personal knowledge versus information / belief", "Place and date of affirmation; attestation requirements to verify"],
+        "Application / representation": ["Name of receiving authority", "Relevant application / reference number", "Administrative decision or action requested"],
+        "Commercial agreement": ["Commercial scope and deliverables", "Consideration, payment and tax terms", "Term, termination, liability and dispute resolution"],
+        "Memorandum of understanding": ["Purpose and binding / non-binding intent", "Roles, milestones and contributions", "Duration, exit and dispute resolution"],
+        "Petition / pleading outline": ["Cause of action / legal grounds", "Territorial and subject-matter jurisdiction facts", "Limitation chronology and interim relief, if any"],
+        "Written submissions outline": ["Case number and forum", "Issues for determination and pleadings relied on", "Authorities and record references (verify citations)"],
+    }
+    labels = specific.get(document_type, ["Purpose of the document", "Relevant legal / factual background"])
+    return {
+        "document_type": document_type, "jurisdiction": jurisdiction,
+        "checklist": common, "document_specific": labels,
+        "jurisdiction_note": f"This intake checklist is for {jurisdiction}; it is not a prescribed form or confirmation of local procedure.",
+        "verification": [
+            "Confirm the current official statute, state amendments, rules and notifications applicable to the selected jurisdiction.",
+            "Confirm the correct court / tribunal / authority, territorial jurisdiction, limitation, court fee, format, stamping, notarisation and service rules from its official source.",
+            "Do not assume local forms or deadlines from this checklist. Obtain advocate review before signing, service or filing."
+        ],
+        "official_portals": [
+            {"name": "India Code", "url": "https://www.indiacode.nic.in/"},
+            {"name": "eCourts", "url": "https://ecourts.gov.in/"},
+            {"name": "e-Gazette of India", "url": "https://egazette.gov.in/"}
+        ]
+    }
+
 @app.get("/api/maharashtra/sources")
 def maharashtra_sources():
     """Return the curated Maharashtra legal/public-source catalogue. Not an indexed corpus."""
