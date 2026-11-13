@@ -193,7 +193,7 @@ def draft(body: DraftRequest):
 
 @app.post("/api/exams/lesson")
 def generate_exam_lesson(body: ExamLessonRequest):
-    allowed = {"JMFC / Civil Judge", "AIBE", "Assistant Public Prosecutor", "Government / PSU / Bank Law Officer", "UGC NET Law"}
+    allowed = {"JMFC / Civil Judge", "AIBE", "Assistant Public Prosecutor", "Government / PSU / Bank Law Officer", "UGC NET Law", "Common Legal Studies Library"}
     if body.exam not in allowed:
         raise HTTPException(400, "Unknown examination")
     language = body.language if body.language in ("English", "Hindi", "Marathi") else "English"
