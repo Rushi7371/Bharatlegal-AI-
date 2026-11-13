@@ -192,4 +192,8 @@ app.include_router(newsroom_router)
 def newsroom_page():
     return FileResponse(BASE / "static" / "news.html")
 
+@app.get("/exams", include_in_schema=False)
+def exams_page():
+    return FileResponse(BASE / "static" / "exams.html")
+
 app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
