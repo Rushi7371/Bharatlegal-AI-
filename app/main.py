@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io, json
+import os, io, json, base64
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
@@ -111,13 +111,28 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
             from google import genai
             from google.genai import types
             prompt = f"""Read all legible text in this document image. Source language: {source_language}. Return ONLY JSON: {{"extracted_text":"faithful original transcription"}}. Preserve names, dates, amounts, paragraphs, headings, numbering, tables, handwriting and footnotes where legible. Mark unclear words [illegible], never guess. Preserve statute names, case names, section numbers and citations accurately."""
-            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"), http_options={"timeout": 60000})
-            response = client.models.generate_content(
-                model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-                contents=[prompt, types.Part.from_bytes(data=data, mime_type=mime or ("image/jpeg" if name.endswith((".jpg", ".jpeg")) else "image/png"))],
-                config=types.GenerateContentConfig(response_mime_type="application/json", system_instruction=SYSTEM)
-            )
-            original = str(json.loads((response.text or "").strip()).get("extracted_text", "")).strip()
+            try:
+                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"), http_options={"timeout": 60000})
+                response = client.models.generate_content(
+                    model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+                    contents=[prompt, types.Part.from_bytes(data=data, mime_type=mime or ("image/jpeg" if name.endswith((".jpg", ".jpeg")) else "image/png"))],
+                    config=types.GenerateContentConfig(response_mime_type="application/json", system_instruction=SYSTEM)
+                )
+                original = str(json.loads((response.text or "").strip()).get("extracted_text", "")).strip()
+            except Exception as gemini_error:
+                # Fall back to OpenAI vision when Gemini quota/rate limits are exhausted.
+                if not os.getenv("OPENAI_API_KEY"):
+                    raise HTTPException(503, "Image OCR provider quota is exhausted or unavailable. Configure available Gemini billing/quota or an OpenAI API key in Railway, then retry.")
+                from openai import OpenAI
+                fallback = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None, timeout=60.0)
+                data_url = "data:" + (mime or "image/jpeg") + ";base64," + base64.b64encode(data).decode("ascii")
+                vision = fallback.chat.completions.create(
+                    model=os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini")),
+                    messages=[{"role":"system","content":SYSTEM},{"role":"user","content":[{"type":"text","text":prompt},{"type":"image_url","image_url":{"url":data_url,"detail":"high"}}]}],
+                    response_format={"type":"json_object"}
+                )
+                vision_text = vision.choices[0].message.content or "{}"
+                original = str(json.loads(vision_text).get("extracted_text", "")).strip()
         elif name.endswith(".pdf") or mime == "application/pdf":
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
