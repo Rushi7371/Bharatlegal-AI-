@@ -258,7 +258,7 @@ Translate every question (q), all four options (o), and explanation (e). Do not 
 """
             translated_raw = ask_model(translation_prompt, language).strip()
             if translated_raw.startswith("```"):
-                translated_raw = translated_raw.split("\\n", 1)[-1]
+                translated_raw = translated_raw.split("\n", 1)[-1]
                 if translated_raw.endswith("```"):
                     translated_raw = translated_raw[:-3].strip()
             translated_data = json.loads(translated_raw)
