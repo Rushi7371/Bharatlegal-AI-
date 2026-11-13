@@ -186,8 +186,16 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                     fallback = src.get_translation(tgt) if src and tgt else None
                     if not fallback: raise RuntimeError("No compatible Argos fallback model")
                     translated = fallback.translate(original)
-                except Exception:
-                    raise HTTPException(503, "Offline OCR succeeded, but IndicTrans2 translation model is not available on this server yet. Check deployment memory and model download logs.")
+                except Exception as argos_error:
+                    print(f"Offline translation failed. IndicTrans2: {type(indic_error).__name__}: {str(indic_error)[:500]}; Argos: {type(argos_error).__name__}: {str(argos_error)[:500]}", flush=True)
+                    detail = (
+                        "OCR succeeded, but the offline translation model could not load. "
+                        f"IndicTrans2 error: {type(indic_error).__name__}: {str(indic_error)[:220]}. "
+                        f"Argos fallback: {type(argos_error).__name__}: {str(argos_error)[:160]}. "
+                        "The translation model may need to finish downloading or the server may lack memory. "
+                        "Your extracted text is retained only in this response; retry after the service is stable."
+                    )
+                    raise HTTPException(503, detail)
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "mode": "offline"}
     except HTTPException:
         raise
