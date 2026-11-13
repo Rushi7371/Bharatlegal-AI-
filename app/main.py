@@ -121,9 +121,9 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
         elif name.endswith(".pdf") or mime == "application/pdf":
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
-            original = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+            original = "\n\n".join(p.extract_text() or "" for p in reader.pages).strip()
             if not original:
-                raise HTTPException(422, "This PDF appears to be scanned or image-only. Please upload page images; scanned-PDF OCR is not yet supported.")
+                raise HTTPException(422, "This PDF appears to be scanned or image-only. Upload page images; scanned-PDF OCR is not yet supported.")
         elif name.endswith(".docx") or "wordprocessingml.document" in mime:
             from docx import Document
             doc = Document(io.BytesIO(data))
@@ -139,11 +139,11 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
         if not original:
             raise HTTPException(422, "No readable text was found in this file.")
         original = original[:60000]
-        prompt = f"""Translate the complete document text below from {source_language} (detect automatically if requested) into {target_language}. Preserve meaning, paragraph order, headings, numbering, tables, names, dates, amounts, statute and case names, section numbers and legal citations. Do not summarize, omit, invent or add facts. Mark ambiguous source wording rather than guessing. Return only the complete translation.\n\nDOCUMENT TEXT:\n{original}"""
+        prompt = f"""Translate the complete document text below from {source_language} (detect automatically if requested) into {target_language}. Preserve meaning, paragraph order, headings, numbering, tables, names, dates, amounts, statute and case names, section numbers and legal citations. Do not summarize, omit, invent or add facts. Return only the complete translation.\n\nDOCUMENT TEXT:\n{original}"""
         translated = ask_model(prompt, target_language).strip()
         if not translated:
             raise HTTPException(502, "Translation service returned an empty result. Please retry.")
-        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "file_type": "image" if is_image else ("PDF" if name.endswith(".pdf") else "document")}
+        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename}
     except HTTPException:
         raise
     except Exception as exc:
