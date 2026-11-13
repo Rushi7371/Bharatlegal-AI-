@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io, json, base64
+import os, io, json, base64, tempfile
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
@@ -94,7 +94,7 @@ def ask_model(prompt: str, language: str = "English"):
 
 @app.post("/api/scan/translate")
 async def scan_and_translate(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
-    """Extract text from images and common documents, then translate."""
+    """Free local OCR and document extraction. Translation uses only installed offline models."""
     if target_language not in {"English", "Hindi", "Marathi"}:
         raise HTTPException(400, "Choose English, Hindi or Marathi.")
     data = await file.read()
@@ -103,42 +103,36 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
     name = (file.filename or "document").lower()
     mime = (file.content_type or "").lower()
     original = ""
-    is_image = mime in {"image/jpeg", "image/png", "image/webp"} or name.endswith((".jpg", ".jpeg", ".png", ".webp"))
+    is_image = mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"))
     try:
-        if is_image:
-            if not os.getenv("GEMINI_API_KEY"):
-                raise HTTPException(503, "Image OCR requires the configured Gemini vision service.")
-            from google import genai
-            from google.genai import types
-            prompt = f"""Read all legible text in this document image. Source language: {source_language}. Return ONLY JSON: {{"extracted_text":"faithful original transcription"}}. Preserve names, dates, amounts, paragraphs, headings, numbering, tables, handwriting and footnotes where legible. Mark unclear words [illegible], never guess. Preserve statute names, case names, section numbers and citations accurately."""
+        import pytesseract
+        from PIL import Image
+        def ocr_image(image):
+            langs = "eng"
+            if source_language == "Hindi": langs = "hin"
+            elif source_language == "Marathi": langs = "mar"
+            else: langs = "eng+hin+mar"
             try:
-                client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"), http_options={"timeout": 60000})
-                response = client.models.generate_content(
-                    model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-                    contents=[prompt, types.Part.from_bytes(data=data, mime_type=mime or ("image/jpeg" if name.endswith((".jpg", ".jpeg")) else "image/png"))],
-                    config=types.GenerateContentConfig(response_mime_type="application/json", system_instruction=SYSTEM)
-                )
-                original = str(json.loads((response.text or "").strip()).get("extracted_text", "")).strip()
-            except Exception as gemini_error:
-                # Fall back to OpenAI vision when Gemini quota/rate limits are exhausted.
-                if not os.getenv("OPENAI_API_KEY"):
-                    raise HTTPException(503, "Image OCR provider quota is exhausted or unavailable. Configure available Gemini billing/quota or an OpenAI API key in Railway, then retry.")
-                from openai import OpenAI
-                fallback = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None, timeout=60.0)
-                data_url = "data:" + (mime or "image/jpeg") + ";base64," + base64.b64encode(data).decode("ascii")
-                vision = fallback.chat.completions.create(
-                    model=os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini")),
-                    messages=[{"role":"system","content":SYSTEM},{"role":"user","content":[{"type":"text","text":prompt},{"type":"image_url","image_url":{"url":data_url,"detail":"high"}}]}],
-                    response_format={"type":"json_object"}
-                )
-                vision_text = vision.choices[0].message.content or "{}"
-                original = str(json.loads(vision_text).get("extracted_text", "")).strip()
+                return pytesseract.image_to_string(image, lang=langs).strip()
+            except Exception:
+                return pytesseract.image_to_string(image, lang="eng").strip()
+        if is_image:
+            image = Image.open(io.BytesIO(data)).convert("RGB")
+            original = ocr_image(image)
         elif name.endswith(".pdf") or mime == "application/pdf":
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
-            original = "\n\n".join(p.extract_text() or "" for p in reader.pages).strip()
+            text_pages = [p.extract_text() or "" for p in reader.pages]
+            original = "\n\n".join(text_pages).strip()
             if not original:
-                raise HTTPException(422, "This PDF appears to be scanned or image-only. Upload page images; scanned-PDF OCR is not yet supported.")
+                import fitz
+                pdf = fitz.open(stream=data, filetype="pdf")
+                pages = []
+                for page in pdf:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+                    pages.append(ocr_image(img))
+                original = "\n\n".join(pages).strip()
         elif name.endswith(".docx") or "wordprocessingml.document" in mime:
             from docx import Document
             doc = Document(io.BytesIO(data))
@@ -150,19 +144,36 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
         elif name.endswith((".txt", ".md")) or mime.startswith("text/"):
             original = data.decode("utf-8-sig", errors="replace").strip()
         else:
-            raise HTTPException(415, "Supported files: JPG, PNG, WEBP, text-based PDF, DOCX, TXT and MD.")
+            raise HTTPException(415, "Supported files: JPG, PNG, WEBP, text-based or scanned PDF, DOCX, TXT and MD.")
         if not original:
-            raise HTTPException(422, "No readable text was found in this file.")
+            raise HTTPException(422, "No readable text found. Check image quality and selected OCR language.")
         original = original[:60000]
-        prompt = f"""Translate the complete document text below from {source_language} (detect automatically if requested) into {target_language}. Preserve meaning, paragraph order, headings, numbering, tables, names, dates, amounts, statute and case names, section numbers and legal citations. Do not summarize, omit, invent or add facts. Return only the complete translation.\n\nDOCUMENT TEXT:\n{original}"""
-        translated = ask_model(prompt, target_language).strip()
-        if not translated:
-            raise HTTPException(502, "Translation service returned an empty result. Please retry.")
-        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename}
+        # Use offline Argos models only: no paid API calls or external translation requests.
+        try:
+            import argostranslate.translate as argos
+            from_code = {"English":"en","Hindi":"hi","Marathi":"mr"}.get(source_language)
+            to_code = {"English":"en","Hindi":"hi","Marathi":"mr"}[target_language]
+            if not from_code:
+                from_code = "en" if all(ord(c)<128 for c in original) else ("mr" if any("\u0900" <= c <= "\u097f" for c in original) else "hi")
+            if from_code == to_code:
+                translated = original
+            else:
+                languages = argos.get_installed_languages()
+                source = next((x for x in languages if x.code == from_code), None)
+                target = next((x for x in languages if x.code == to_code), None)
+                translation = source.get_translation(target) if source and target else None
+                if not translation:
+                    raise HTTPException(503, f"Free offline translation model for {from_code} → {to_code} is not installed. OCR succeeded; you can copy the extracted text. Marathi offline translation model still needs to be added.")
+                translated = translation.translate(original)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, "Local OCR completed, but no compatible offline translation model is installed for this language pair.")
+        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "mode": "offline"}
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, "Could not read or translate this file. " + str(exc)[:180])
+        raise HTTPException(502, "Local document processing failed. " + str(exc)[:180])
 
 @app.get("/api/health")
 def health():
