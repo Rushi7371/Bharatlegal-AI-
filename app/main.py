@@ -148,52 +148,67 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
         if not original:
             raise HTTPException(422, "No readable text found. Check image quality and selected OCR language.")
         original = original[:60000]
-        # Primary offline translator: AI4Bharat IndicTrans2. Argos is retained as fallback.
-        codes = {"English":"eng_Latn","Hindi":"hin_Deva","Marathi":"mar_Deva"}
-        from_code = codes.get(source_language)
-        to_code = codes[target_language]
-        if not from_code:
-            from_code = "eng_Latn" if all(ord(c)<128 for c in original) else ("mar_Deva" if any("\\u0900" <= c <= "\\u097f" for c in original) else "hin_Deva")
-        if from_code == to_code:
+        # Public, ungated OPUS-MT models. Hindi/Marathi cross-translation uses an English pivot.
+        lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
+        src = lang_code.get(source_language)
+        tgt = lang_code[target_language]
+        if not src:
+            # Conservative script-based detection; users can select Hindi/Marathi explicitly.
+            devanagari = sum(1 for ch in original if "\\u0900" <= ch <= "\\u097f")
+            latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
+            src = "en" if latin >= devanagari else "hi"
+        if src == tgt:
             translated = original
         else:
-            translated = None
             try:
-                from IndicTransToolkit import IndicProcessor
-                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
                 import torch
-                direction = "en-indic" if from_code == "eng_Latn" else ("indic-en" if to_code == "eng_Latn" else "indic-indic")
-                model_id = {"en-indic":"ai4bharat/indictrans2-en-indic-dist-200M","indic-en":"ai4bharat/indictrans2-indic-en-dist-200M","indic-indic":"ai4bharat/indictrans2-indic-indic-dist-320M"}[direction]
-                tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-                model = AutoModelForSeq2SeqLM.from_pretrained(model_id, trust_remote_code=True)
-                processor = IndicProcessor(inference=True)
-                chunks = [original[i:i+900] for i in range(0, len(original), 900)]
-                output_chunks = []
-                for chunk in chunks:
-                    batch = processor.preprocess_batch([chunk], src_lang=from_code, tgt_lang=to_code)
-                    inputs = tokenizer(batch, truncation=True, padding="longest", return_tensors="pt")
-                    with torch.inference_mode():
-                        generated = model.generate(**inputs, num_beams=5, num_return_sequences=1, max_length=1024)
-                    decoded = tokenizer.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                    output_chunks.extend(processor.postprocess_batch(decoded, lang=to_code))
-                translated = "\\n\\n".join(output_chunks)
-            except Exception as indic_error:
+                model_cache = BASE / "models"
+                def translate_pair(text, source, target):
+                    model_id = f"Helsinki-NLP/opus-mt-{source}-{target}"
+                    local_dir = model_cache / f"opus-mt-{source}-{target}"
+                    model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
+                    tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache))
+                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache))
+                    outputs = []
+                    for offset in range(0, len(text), 700):
+                        batch = tokenizer(text[offset:offset+700], return_tensors="pt", truncation=True, max_length=512)
+                        with torch.inference_mode():
+                            generated = model.generate(**batch, num_beams=4, max_new_tokens=512)
+                        outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
+                    del model, tokenizer
+                    return "\\n\\n".join(outputs)
+                if src == "en" or tgt == "en":
+                    translated = translate_pair(original, src, tgt)
+                else:
+                    intermediate = translate_pair(original, src, "en")
+                    translated = translate_pair(intermediate, "en", tgt)
+            except Exception as model_error:
+                print(f"OPUS-MT offline translation failed: {type(model_error).__name__}: {str(model_error)[:500]}", flush=True)
                 try:
                     import argostranslate.translate as argos
                     languages = argos.get_installed_languages()
-                    src = next((x for x in languages if x.code == {"eng_Latn":"en","hin_Deva":"hi","mar_Deva":"mr"}[from_code]), None)
-                    tgt = next((x for x in languages if x.code == {"eng_Latn":"en","hin_Deva":"hi","mar_Deva":"mr"}[to_code]), None)
-                    fallback = src.get_translation(tgt) if src and tgt else None
-                    if not fallback: raise RuntimeError("No compatible Argos fallback model")
-                    translated = fallback.translate(original)
+                    src_lang = next((x for x in languages if x.code == src), None)
+                    tgt_lang = next((x for x in languages if x.code == tgt), None)
+                    fallback = src_lang.get_translation(tgt_lang) if src_lang and tgt_lang else None
+                    if not fallback and src != "en" and tgt != "en":
+                        en_lang = next((x for x in languages if x.code == "en"), None)
+                        first = src_lang.get_translation(en_lang) if src_lang and en_lang else None
+                        second = en_lang.get_translation(tgt_lang) if en_lang and tgt_lang else None
+                        if first and second:
+                            translated = second.translate(first.translate(original))
+                        else:
+                            raise RuntimeError("No compatible Argos direct or English-pivot model")
+                    elif fallback:
+                        translated = fallback.translate(original)
+                    else:
+                        raise RuntimeError("No compatible Argos translation model")
                 except Exception as argos_error:
-                    print(f"Offline translation failed. IndicTrans2: {type(indic_error).__name__}: {str(indic_error)[:500]}; Argos: {type(argos_error).__name__}: {str(argos_error)[:500]}", flush=True)
                     detail = (
-                        "OCR succeeded, but the offline translation model could not load. "
-                        f"IndicTrans2 error: {type(indic_error).__name__}: {str(indic_error)[:220]}. "
-                        f"Argos fallback: {type(argos_error).__name__}: {str(argos_error)[:160]}. "
-                        "The translation model may need to finish downloading or the server may lack memory. "
-                        "Your extracted text is retained only in this response; retry after the service is stable."
+                        "OCR succeeded, but offline translation failed. "
+                        f"Public OPUS-MT model error: {type(model_error).__name__}: {str(model_error)[:180]}. "
+                        f"Argos fallback: {type(argos_error).__name__}: {str(argos_error)[:120]}. "
+                        "Please retry; extracted text is not stored."
                     )
                     raise HTTPException(503, detail)
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "mode": "offline"}
