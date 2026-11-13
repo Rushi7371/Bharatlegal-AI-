@@ -31,6 +31,11 @@ class ExamLessonRequest(BaseModel):
     subject: str
     language: str = "English"
 
+class ExamQuestionsRequest(BaseModel):
+    exam: str
+    language: str = "English"
+    batch: int = 1
+
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
 def ask_model(prompt: str, language: str = "English"):
@@ -214,6 +219,39 @@ Use current Indian law. Where relevant, explain the transition between IPC/BNS, 
         raise HTTPException(502, "Study lesson could not be generated. Please retry.")
     return {"exam": body.exam, "subject": body.subject, "language": language, "lesson": lesson}
     
+
+@app.post("/api/exams/questions")
+def generate_exam_questions(body: ExamQuestionsRequest):
+    allowed = {"JMFC / Civil Judge", "AIBE", "Assistant Public Prosecutor", "Government / PSU / Bank Law Officer", "UGC NET Law"}
+    if body.exam not in allowed:
+        raise HTTPException(400, "Unknown examination")
+    language = body.language if body.language in ("English", "Hindi", "Marathi") else "English"
+    batch = max(1, min(int(body.batch or 1), 1000000))
+    prompt = f"""Create exactly 10 fresh, original, objectively answerable multiple-choice questions for Indian law exam preparation.
+Exam: {body.exam}
+Language: {language}
+Practice batch number: {batch}. Make this batch distinct; do not repeat generic starter questions. Vary topics, statutory interpretation and application scenarios appropriate to this examination.
+Use current Indian law. Account for the 1 July 2024 commencement and savings/transition rules for BNS, BNSS and BSA where relevant. Never invent section numbers, cases, legal rules or exam notifications. If a point is uncertain, choose another question.
+Return ONLY valid JSON with this exact structure:
+{{"questions":[{{"q":"question text","o":["option A","option B","option C","option D"],"a":0,"e":"Concise explanation establishing why the keyed answer is correct."}}]}}
+Requirements: exactly 10 question objects; four plausible distinct options each; a is the zero-based index of exactly one correct option (0-3); e explains the correct legal principle and, where useful, its statutory basis. Questions must be self-contained, no duplicate questions within the batch, no "all of the above", no trick ambiguity. Write all question text, options and explanations in {language}; preserve official Act titles and section numbers accurately. These are original practice questions, not purported past-paper questions."""
+    raw = ask_model(prompt, language).strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+    try:
+        data = json.loads(raw)
+        qs = data.get("questions", [])
+        if len(qs) != 10:
+            raise ValueError("Expected 10 questions")
+        for q in qs:
+            if not isinstance(q.get("q"), str) or len(q.get("o", [])) != 4 or q.get("a") not in (0, 1, 2, 3) or not isinstance(q.get("e"), str):
+                raise ValueError("Invalid question structure")
+        return {"exam": body.exam, "language": language, "batch": batch, "questions": qs}
+    except Exception:
+        raise HTTPException(502, "Could not prepare a valid 10-question batch. Please retry.")
+
 @app.post("/api/exams/translate")
 def translate_exam_content(body: ExamTranslateRequest):
     language = body.language if body.language in ("Hindi", "Marathi") else "English"
