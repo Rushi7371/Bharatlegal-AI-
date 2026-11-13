@@ -26,6 +26,11 @@ class ExamTranslateRequest(BaseModel):
     language: str
     payload: dict
 
+class ExamLessonRequest(BaseModel):
+    exam: str
+    subject: str
+    language: str = "English"
+
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
 def ask_model(prompt: str, language: str = "English"):
@@ -186,6 +191,29 @@ def draft(body: DraftRequest):
     prompt = f"Draft type: {body.document_type}\nJurisdiction / State / Union Territory: {body.jurisdiction}\nTone: {body.tone}\nFacts and structured particulars: {body.facts}\n\nPrepare a jurisdiction-aware working draft with clear headings and bracketed placeholders for missing details. Use the selected State/UT, district, taluka/tehsil, police station and court/forum particulars where supplied. Distinguish central law from state-specific legislation, rules and local court practice. Do not assume that a state has a particular prescribed form, fee, limitation period, court hierarchy or filing requirement unless verified from a supplied authoritative source. If the applicable local rule or form is not verified, explicitly mark it for verification and identify the relevant official authority/source to consult. For criminal matters, ask for the date of alleged conduct and apply the appropriate IPC/BNS transition caveat. Do not invent facts, statutory citations, case law, court rules or filing requirements. Preserve supplied names, dates, amounts and addresses exactly; flag inconsistencies and missing mandatory particulars instead of guessing. Finish with (1) missing-information checklist, (2) jurisdiction and procedure verification checklist, and (3) advocate review warning. This is a working draft, not a filing-ready document."
     return {"draft": ask_model(prompt, body.language)}
 
+@app.post("/api/exams/lesson")
+def generate_exam_lesson(body: ExamLessonRequest):
+    allowed = {"JMFC / Civil Judge", "AIBE", "Assistant Public Prosecutor", "Government / PSU / Bank Law Officer", "UGC NET Law"}
+    if body.exam not in allowed:
+        raise HTTPException(400, "Unknown examination")
+    language = body.language if body.language in ("English", "Hindi", "Marathi") else "English"
+    prompt = f"""You are the in-house law exam educator for BharatLegal AI in India. Prepare a self-contained, useful study lesson for a law student preparing for {body.exam}.
+Subject/topic: {body.subject}
+Language: {language}.
+Write substantive teaching material, NOT a reading list and NOT instructions to go elsewhere. Target 700-1000 words. Use clear headings:
+1. What this topic covers
+2. Core concepts and definitions
+3. Key statutory framework and important provisions (verify accuracy; if uncertain, say so rather than inventing section numbers)
+4. How the legal rule works, with 2 practical illustrations
+5. Important distinctions / common exam traps
+6. Exam-focused revision points
+7. Five quick self-check questions with short answers.
+Use current Indian law. Where relevant, explain the transition between IPC/BNS, CrPC/BNSS and Evidence Act/BSA, including commencement on 1 July 2024 and savings/transition caveats. Do not claim this is an official paper or reproduce copyrighted coaching material. Do not invent cases, citations, amendments, section numbers, syllabus claims or official notifications. Explain that state judicial-service syllabi differ and the current notification controls. Make the material understandable without clicking external links. Return plain text with headings; no JSON and no markdown table."""
+    lesson = ask_model(prompt, language)
+    if not lesson or len(lesson.strip()) < 250:
+        raise HTTPException(502, "Study lesson could not be generated. Please retry.")
+    return {"exam": body.exam, "subject": body.subject, "language": language, "lesson": lesson}
+    
 @app.post("/api/exams/translate")
 def translate_exam_content(body: ExamTranslateRequest):
     language = body.language if body.language in ("Hindi", "Marathi") else "English"
