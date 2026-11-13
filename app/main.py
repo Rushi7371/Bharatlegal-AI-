@@ -187,4 +187,9 @@ def mobile_redirect():
     return RedirectResponse(url="/mobile/", status_code=307)
 
 app.include_router(newsroom_router)
+
+@app.get("/news", include_in_schema=False)
+def newsroom_page():
+    return FileResponse(BASE / "static" / "news.html")
+
 app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
