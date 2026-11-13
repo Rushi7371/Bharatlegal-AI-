@@ -3,11 +3,13 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io, json, base64, tempfile
+import os, io, json, base64, tempfile, threading
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
 BASE = Path(__file__).resolve().parent.parent
+_TRANSLATION_MODELS = {}
+_TRANSLATION_MODEL_LOCK = threading.Lock()
 app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focused legal workflow assistant")
 
 class ChatRequest(BaseModel):
@@ -166,17 +168,26 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                 model_cache = BASE / "models"
                 def translate_pair(text, source, target):
                     model_id = f"Helsinki-NLP/opus-mt-{source}-{target}"
-                    local_dir = model_cache / f"opus-mt-{source}-{target}"
-                    model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
-                    tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache))
-                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache))
+                    cache_key = f"{source}-{target}"
+                    # Load each language pair once per running server process. This avoids
+                    # re-downloading/re-initialising multi-hundred-MB models on every scan.
+                    with _TRANSLATION_MODEL_LOCK:
+                        pair = _TRANSLATION_MODELS.get(cache_key)
+                        if pair is None:
+                            local_dir = model_cache / f"opus-mt-{source}-{target}"
+                            model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
+                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache))
+                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache))
+                            model.eval()
+                            pair = (tokenizer, model)
+                            _TRANSLATION_MODELS[cache_key] = pair
+                    tokenizer, model = pair
                     outputs = []
-                    for offset in range(0, len(text), 700):
-                        batch = tokenizer(text[offset:offset+700], return_tensors="pt", truncation=True, max_length=512)
+                    for offset in range(0, len(text), 450):
+                        batch = tokenizer(text[offset:offset+450], return_tensors="pt", truncation=True, max_length=384)
                         with torch.inference_mode():
-                            generated = model.generate(**batch, num_beams=4, max_new_tokens=512)
+                            generated = model.generate(**batch, num_beams=2, max_new_tokens=384)
                         outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
-                    del model, tokenizer
                     return "\\n\\n".join(outputs)
                 if src == "en" or tgt == "en":
                     translated = translate_pair(original, src, tgt)
