@@ -74,12 +74,6 @@ def analyze(body: AnalysisRequest):
     prompt = ("Analyze this Indian legal-news item using ONLY the supplied headline and snippet. Do not claim to have read the full article or judgment.\n"
       +"Headline: "+body.title+"\nPublisher: "+body.publisher+"\nSnippet: "+body.snippet[:1500]+"\nSource: "+body.url+"\n"
       +"Provide concise summary, likely legal issue if inferable, practical relevance, what remains unverified, and official primary sources to check. Never invent a case name, citation, judge, section, holding, date or legal effect. Label inference and uncertainty. This is legal information, not advice.")
-    key=os.getenv("GEMINI_API_KEY")
-    if not key: raise HTTPException(503,"AI analysis requires GEMINI_API_KEY configured in Railway.")
-    try:
-        from google import genai
-        client=genai.Client(api_key=key)
-        response=client.models.generate_content(model=os.getenv("GEMINI_MODEL","gemini-3.8-flash"),contents=prompt)
-        answer=response.text or "AI returned no analysis."
-    except Exception as exc: raise HTTPException(502,"AI analysis is temporarily unavailable: "+str(exc)[:180])
+    from app.main import ask_model
+    answer = ask_model(prompt, body.language)
     return {"analysis":answer,"scope_note":"Analysis is based only on the supplied headline/snippet, not the full article or primary court record.","source_url":body.url}
