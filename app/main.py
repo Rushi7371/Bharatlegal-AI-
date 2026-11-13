@@ -91,6 +91,43 @@ def ask_model(prompt: str, language: str = "English"):
     raise HTTPException(status_code=502, detail="AI services are temporarily unavailable. " + " || ".join(errors) + " Please retry shortly. If this continues, check the provider API key, quota and model access in Railway.")
 
 
+
+@app.post("/api/scan/translate")
+async def scan_and_translate(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
+    """OCR a photographed document and translate its text."""
+    if target_language not in {"English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose English, Hindi or Marathi.")
+    data = await file.read()
+    if not data or len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Choose an image up to 10 MB.")
+    mime = (file.content_type or "").lower()
+    if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(415, "Supported formats: JPG, PNG and WEBP.")
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(503, "Image scanning requires the configured Gemini vision service.")
+    prompt = f"""Read all legible text in this document image. Source language: {source_language}. Translate into {target_language}.
+Return ONLY JSON: {{"extracted_text":"faithful original transcription","translated_text":"complete translation"}}.
+Preserve names, dates, amounts, paragraph order, headings, numbering, tables, handwritten text and footnotes where legible. Mark unclear words [illegible], never guess. Preserve statute names, case names, section numbers and legal citations accurately. Do not summarize or add facts. If no text is legible, return empty strings."""
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"), http_options={"timeout": 60000})
+        response = client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+            contents=[prompt, types.Part.from_bytes(data=data, mime_type=mime)],
+            config=types.GenerateContentConfig(response_mime_type="application/json", system_instruction=SYSTEM)
+        )
+        result = json.loads((response.text or "").strip())
+        original = str(result.get("extracted_text", "")).strip()
+        translated = str(result.get("translated_text", "")).strip()
+        if not original or not translated:
+            raise HTTPException(422, "No readable text found. Try a sharper, well-lit image.")
+        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, "Could not scan and translate this image. Try a clearer image or retry. " + str(exc)[:160])
+
 @app.get("/api/health")
 def health():
     return {
