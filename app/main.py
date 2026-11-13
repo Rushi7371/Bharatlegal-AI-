@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from pathlib import Path
 import os, io
 from app.maharashtra_sources import load_catalogue, check_source
+from app.newsroom import router as newsroom_router
 
 BASE = Path(__file__).resolve().parent.parent
 app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focused legal workflow assistant")
@@ -185,4 +186,5 @@ def draft(body: DraftRequest):
 def mobile_redirect():
     return RedirectResponse(url="/mobile/", status_code=307)
 
+app.include_router(newsroom_router)
 app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
