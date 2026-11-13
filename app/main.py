@@ -248,6 +248,27 @@ Requirements: exactly 10 question objects; four plausible distinct options each;
         for q in qs:
             if not isinstance(q.get("q"), str) or len(q.get("o", [])) != 4 or q.get("a") not in (0, 1, 2, 3) or not isinstance(q.get("e"), str):
                 raise ValueError("Invalid question structure")
+        # Run a dedicated translation pass for non-English batches. This prevents
+        # the generator from silently returning English questions when Marathi/Hindi
+        # was requested. Preserve option order and answer indexes exactly.
+        if language in ("Marathi", "Hindi"):
+            translation_prompt = f"""Translate every learner-facing string in this JSON into natural, complete {language} for Indian law students.
+Translate every question (q), all four options (o), and explanation (e). Do not leave English sentences untranslated. Preserve statutory names, Act titles, abbreviations, section numbers, dates and legal citations accurately; they may remain in their authoritative form where appropriate. Do not change the meaning, question count, option order, or answer index (a). Return ONLY valid JSON with the same structure and keys:
+{json.dumps({"questions": qs}, ensure_ascii=False)}
+"""
+            translated_raw = ask_model(translation_prompt, language).strip()
+            if translated_raw.startswith("```"):
+                translated_raw = translated_raw.split("\\n", 1)[-1]
+                if translated_raw.endswith("```"):
+                    translated_raw = translated_raw[:-3].strip()
+            translated_data = json.loads(translated_raw)
+            translated_qs = translated_data.get("questions", [])
+            if len(translated_qs) != 10:
+                raise ValueError("Translation returned an incomplete batch")
+            for q in translated_qs:
+                if not isinstance(q.get("q"), str) or len(q.get("o", [])) != 4 or q.get("a") not in (0, 1, 2, 3) or not isinstance(q.get("e"), str):
+                    raise ValueError("Invalid translated question structure")
+            qs = translated_qs
         return {"exam": body.exam, "language": language, "batch": batch, "questions": qs}
     except Exception:
         raise HTTPException(502, "Could not prepare a valid 10-question batch. Please retry.")
