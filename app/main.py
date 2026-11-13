@@ -346,4 +346,8 @@ def newsroom_page():
 def exams_page():
     return FileResponse(BASE / "static" / "exams.html")
 
+@app.get("/scanner", include_in_schema=False)
+def scanner_page():
+    return FileResponse(BASE / "static" / "scanner.html")
+
 app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
