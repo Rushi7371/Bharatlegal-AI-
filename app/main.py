@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io
+import os, io, json
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
@@ -21,6 +21,10 @@ class DraftRequest(BaseModel):
     jurisdiction: str = "India"
     tone: str = "Formal"
     language: str = "English"
+
+class ExamTranslateRequest(BaseModel):
+    language: str
+    payload: dict
 
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
@@ -181,6 +185,28 @@ def draft(body: DraftRequest):
         raise HTTPException(400, "Provide the facts and drafting instructions.")
     prompt = f"Draft type: {body.document_type}\nJurisdiction / State / Union Territory: {body.jurisdiction}\nTone: {body.tone}\nFacts and structured particulars: {body.facts}\n\nPrepare a jurisdiction-aware working draft with clear headings and bracketed placeholders for missing details. Use the selected State/UT, district, taluka/tehsil, police station and court/forum particulars where supplied. Distinguish central law from state-specific legislation, rules and local court practice. Do not assume that a state has a particular prescribed form, fee, limitation period, court hierarchy or filing requirement unless verified from a supplied authoritative source. If the applicable local rule or form is not verified, explicitly mark it for verification and identify the relevant official authority/source to consult. For criminal matters, ask for the date of alleged conduct and apply the appropriate IPC/BNS transition caveat. Do not invent facts, statutory citations, case law, court rules or filing requirements. Preserve supplied names, dates, amounts and addresses exactly; flag inconsistencies and missing mandatory particulars instead of guessing. Finish with (1) missing-information checklist, (2) jurisdiction and procedure verification checklist, and (3) advocate review warning. This is a working draft, not a filing-ready document."
     return {"draft": ask_model(prompt, body.language)}
+
+@app.post("/api/exams/translate")
+def translate_exam_content(body: ExamTranslateRequest):
+    language = body.language if body.language in ("Hindi", "Marathi") else "English"
+    if language == "English":
+        return {"translation": body.payload}
+    prompt = f"""Translate the complete legal exam learning content below into {language}.
+Return ONLY valid JSON with exactly the same keys and structure. Translate all user-facing prose, subject names, questions, answer options, explanations, descriptions and headings. Preserve question ordering, option ordering, statutory names, Act titles, case names, abbreviations (CPC, BNS, BNSS, BSA, AIBE, JMFC), section numbers, dates and legal citations accurately. Keep the legal meaning precise; do not add or remove content. Use clear, natural Indian {language} suitable for law students. Do not translate URLs (none are expected). JSON input:
+{json.dumps(body.payload, ensure_ascii=False)}
+"""
+    raw = ask_model(prompt, language)
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+    try:
+        translated = json.loads(cleaned)
+    except Exception:
+        raise HTTPException(502, "Could not parse the translation. Please retry or use English.")
+    return {"translation": translated}
 
 @app.get("/mobile", include_in_schema=False)
 def mobile_redirect():
