@@ -1,15 +1,17 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io, json, base64, tempfile, threading
+import os, io, json, base64, tempfile, threading, uuid, time
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
 BASE = Path(__file__).resolve().parent.parent
 _TRANSLATION_MODELS = {}
 _TRANSLATION_MODEL_LOCK = threading.Lock()
+_SCAN_JOBS = {}
+_SCAN_JOBS_LOCK = threading.Lock()
 app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focused legal workflow assistant")
 
 class ChatRequest(BaseModel):
@@ -90,34 +92,28 @@ def ask_model(prompt: str, language: str = "English"):
         except Exception as exc:
             errors.append(f"OpenAI: {type(exc).__name__}: {str(exc)[:220]}")
 
-    raise HTTPException(status_code=502, detail="AI services are temporarily unavailable. " + " || ".join(errors) + " Please retry shortly. If this continues, check the provider API key, quota and model access in Railway.")
+    raise HTTPException(status_code=502, detail="AI services are temporarily unavailable. " + " || ".join(errors) + " Please retry shortly. If thisdef _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_language: str, target_language: str):
+    """Run OCR and local translation outside the request lifecycle; expose progress by job id."""
+    def update(**values):
+        with _SCAN_JOBS_LOCK:
+            if job_id in _SCAN_JOBS:
+                _SCAN_JOBS[job_id].update(values, updated_at=time.time())
 
-
-
-@app.post("/api/scan/translate")
-async def scan_and_translate(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
-    """Free local OCR and document extraction. Translation uses only installed offline models."""
-    if target_language not in {"English", "Hindi", "Marathi"}:
-        raise HTTPException(400, "Choose English, Hindi or Marathi.")
-    data = await file.read()
-    if not data or len(data) > 15 * 1024 * 1024:
-        raise HTTPException(413, "Choose a file up to 15 MB.")
-    name = (file.filename or "document").lower()
-    mime = (file.content_type or "").lower()
-    original = ""
-    is_image = mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"))
     try:
+        update(status="processing", stage="Extracting document text", progress=5)
+        name = (filename or "document").lower()
+        is_image = mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"))
         import pytesseract
         from PIL import Image
+
         def ocr_image(image):
-            langs = "eng"
-            if source_language == "Hindi": langs = "hin"
-            elif source_language == "Marathi": langs = "mar"
-            else: langs = "eng+hin+mar"
+            langs = {"Hindi": "hin", "Marathi": "mar"}.get(source_language, "eng+hin+mar")
             try:
                 return pytesseract.image_to_string(image, lang=langs).strip()
             except Exception:
                 return pytesseract.image_to_string(image, lang="eng").strip()
+
+        original = ""
         if is_image:
             image = Image.open(io.BytesIO(data)).convert("RGB")
             original = ocr_image(image)
@@ -125,16 +121,19 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
             text_pages = [p.extract_text() or "" for p in reader.pages]
-            original = "\n\n".join(text_pages).strip()
+            original = "\\n\\n".join(text_pages).strip()
             if not original:
                 import fitz
                 pdf = fitz.open(stream=data, filetype="pdf")
+                if len(pdf) > 30:
+                    raise ValueError("This scanned PDF has more than 30 pages. Split it into smaller files and retry.")
                 pages = []
-                for page in pdf:
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                for index, page in enumerate(pdf):
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                     img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
                     pages.append(ocr_image(img))
-                original = "\n\n".join(pages).strip()
+                    update(stage=f"Reading scanned PDF page {index + 1} of {len(pdf)}", progress=min(45, 10 + int(35*(index+1)/max(1,len(pdf)))))
+                original = "\\n\\n".join(pages).strip()
         elif name.endswith(".docx") or "wordprocessingml.document" in mime:
             from docx import Document
             doc = Document(io.BytesIO(data))
@@ -142,60 +141,63 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
             for table in doc.tables:
                 for row in table.rows:
                     chunks.append(" | ".join(cell.text for cell in row.cells))
-            original = "\n".join(chunks).strip()
+            original = "\\n".join(chunks).strip()
         elif name.endswith((".txt", ".md")) or mime.startswith("text/"):
             original = data.decode("utf-8-sig", errors="replace").strip()
         else:
-            raise HTTPException(415, "Supported files: JPG, PNG, WEBP, text-based or scanned PDF, DOCX, TXT and MD.")
+            raise ValueError("Supported files: JPG, PNG, WEBP, text-based or scanned PDF, DOCX, TXT and MD.")
         if not original:
-            raise HTTPException(422, "No readable text found. Check image quality and selected OCR language.")
+            raise ValueError("No readable text found. Check image quality and selected OCR language.")
+
         original = original[:60000]
-        # Public, ungated OPUS-MT models. Hindi/Marathi cross-translation uses an English pivot.
+        update(stage="Loading translation model", progress=50)
         lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
         src = lang_code.get(source_language)
         tgt = lang_code[target_language]
         if not src:
-            # Conservative script-based detection; users can select Hindi/Marathi explicitly.
-            devanagari = sum(1 for ch in original if "\\u0900" <= ch <= "\\u097f")
+            devanagari = sum(1 for ch in original if 0x0900 <= ord(ch) <= 0x097F)
             latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
             src = "en" if latin >= devanagari else "hi"
+
         if src == tgt:
             translated = original
         else:
             try:
                 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
                 import torch
+                torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
                 model_cache = BASE / "models"
+
                 def translate_pair(text, source, target):
-                    model_id = f"Helsinki-NLP/opus-mt-{source}-{target}"
                     cache_key = f"{source}-{target}"
-                    # Load each language pair once per running server process. This avoids
-                    # re-downloading/re-initialising multi-hundred-MB models on every scan.
                     with _TRANSLATION_MODEL_LOCK:
                         pair = _TRANSLATION_MODELS.get(cache_key)
                         if pair is None:
                             local_dir = model_cache / f"opus-mt-{source}-{target}"
-                            model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
-                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache))
-                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache))
+                            model_path = str(local_dir) if (local_dir / "config.json").exists() else f"Helsinki-NLP/opus-mt-{source}-{target}"
+                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=(model_path != f"Helsinki-NLP/opus-mt-{source}-{target}"))
+                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=(model_path != f"Helsinki-NLP/opus-mt-{source}-{target}"))
                             model.eval()
                             pair = (tokenizer, model)
                             _TRANSLATION_MODELS[cache_key] = pair
                     tokenizer, model = pair
+                    pieces = [text[i:i+650] for i in range(0, len(text), 650)]
                     outputs = []
-                    for offset in range(0, len(text), 450):
-                        batch = tokenizer(text[offset:offset+450], return_tensors="pt", truncation=True, max_length=384)
+                    for i, piece in enumerate(pieces):
+                        batch = tokenizer(piece, return_tensors="pt", truncation=True, max_length=256)
                         with torch.inference_mode():
-                            generated = model.generate(**batch, num_beams=2, max_new_tokens=384)
+                            generated = model.generate(**batch, num_beams=1, max_new_tokens=192)
                         outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
+                        update(stage=f"Translating section {i+1} of {len(pieces)}", progress=min(95, 55 + int(40*(i+1)/max(1,len(pieces)))))
                     return "\\n\\n".join(outputs)
+
                 if src == "en" or tgt == "en":
                     translated = translate_pair(original, src, tgt)
                 else:
                     intermediate = translate_pair(original, src, "en")
                     translated = translate_pair(intermediate, "en", tgt)
             except Exception as model_error:
-                print(f"OPUS-MT offline translation failed: {type(model_error).__name__}: {str(model_error)[:500]}", flush=True)
+                print(f"OPUS-MT offline translation failed: {type(model_error).__name__}: {str(model_error)[:400]}", flush=True)
                 try:
                     import argostranslate.translate as argos
                     languages = argos.get_installed_languages()
@@ -215,18 +217,48 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                     else:
                         raise RuntimeError("No compatible Argos translation model")
                 except Exception as argos_error:
-                    detail = (
-                        "OCR succeeded, but offline translation failed. "
-                        f"Public OPUS-MT model error: {type(model_error).__name__}: {str(model_error)[:180]}. "
-                        f"Argos fallback: {type(argos_error).__name__}: {str(argos_error)[:120]}. "
-                        "Please retry; extracted text is not stored."
-                    )
-                    raise HTTPException(503, detail)
-        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "mode": "offline"}
-    except HTTPException:
-        raise
+                    raise RuntimeError("OCR completed, but no compatible offline translation model is installed for this language pair. " + str(argos_error)[:180])
+
+        update(status="completed", stage="Complete", progress=100, result={
+            "source_language": source_language, "target_language": target_language,
+            "extracted_text": original, "translated_text": translated,
+            "filename": filename, "mode": "offline"
+        })
     except Exception as exc:
-        raise HTTPException(502, "Local document processing failed. " + str(exc)[:180])
+        update(status="failed", stage="Failed", progress=100, error=str(exc)[:500])
+
+
+@app.post("/api/scan/translate", status_code=202)
+async def scan_and_translate(background_tasks: BackgroundTasks, file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
+    """Queue OCR and offline translation; the client polls for progress instead of holding one long request."""
+    if target_language not in {"English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose English, Hindi or Marathi.")
+    data = await file.read()
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Choose a file up to 15 MB.")
+    if source_language not in {"Auto-detect", "English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose a supported source language.")
+    job_id = str(uuid.uuid4())
+    with _SCAN_JOBS_LOCK:
+        _SCAN_JOBS[job_id] = {"status": "queued", "stage": "Queued", "progress": 0, "created_at": time.time(), "updated_at": time.time()}
+        # Keep the in-memory job table bounded.
+        for old_id, job in list(_SCAN_JOBS.items()):
+            if time.time() - job.get("created_at", time.time()) > 3600:
+                _SCAN_JOBS.pop(old_id, None)
+    background_tasks.add_task(_run_scan_job, job_id, data, file.filename or "document", file.content_type or "", source_language, target_language)
+    return {"job_id": job_id, "status": "queued", "status_url": f"/api/scan/status/{job_id}"}
+
+
+@app.get("/api/scan/status/{job_id}")
+def scan_job_status(job_id: str):
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "Scan job not found or expired. Please upload the document again.")
+        return {key: value for key, value in job.items() if key not in {"created_at", "updated_at"}}
+
+
+aise HTTPException(502, "Local document processing failed. " + str(exc)[:180])
 
 @app.get("/api/health")
 def health():
