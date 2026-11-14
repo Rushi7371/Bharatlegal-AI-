@@ -130,8 +130,10 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                 import fitz
                 pdf = fitz.open(stream=data, filetype="pdf")
                 pages = []
+                if len(pdf) > 25:
+                    raise HTTPException(413, "Scanned PDF is over 25 pages. Split it into smaller files for faster processing.")
                 for page in pdf:
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                     img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
                     pages.append(ocr_image(img))
                 original = "\n\n".join(pages).strip()
@@ -156,7 +158,7 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
         tgt = lang_code[target_language]
         if not src:
             # Conservative script-based detection; users can select Hindi/Marathi explicitly.
-            devanagari = sum(1 for ch in original if "\\u0900" <= ch <= "\\u097f")
+            devanagari = sum(1 for ch in original if 0x0900 <= ord(ch) <= 0x097F)
             latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
             src = "en" if latin >= devanagari else "hi"
         if src == tgt:
@@ -183,10 +185,10 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                             _TRANSLATION_MODELS[cache_key] = pair
                     tokenizer, model = pair
                     outputs = []
-                    for offset in range(0, len(text), 450):
-                        batch = tokenizer(text[offset:offset+450], return_tensors="pt", truncation=True, max_length=384)
+                    for offset in range(0, len(text), 1000):
+                        batch = tokenizer(text[offset:offset+1000], return_tensors="pt", truncation=True, max_length=256)
                         with torch.inference_mode():
-                            generated = model.generate(**batch, num_beams=2, max_new_tokens=384)
+                            generated = model.generate(**batch, num_beams=1, max_new_tokens=192)
                         outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
                     return "\\n\\n".join(outputs)
                 if src == "en" or tgt == "en":
