@@ -108,16 +108,44 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
     is_image = mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"))
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+        def ocr_quality(text):
+            import re
+            compact = re.sub(r"\\s+", "", text)
+            if not compact:
+                return -100000
+            useful = sum(ch.isalpha() for ch in text)
+            digits = sum(ch.isdigit() for ch in text)
+            words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", text)
+            repeated = sum(1 for m in re.finditer(r"(.)\\1{4,}", compact))
+            # Penalise digit-only and repeated-character OCR hallucinations.
+            return useful * 2 + len(words) * 8 - digits * 3 - repeated * 100
         def ocr_image(image):
-            langs = "eng"
-            if source_language == "Hindi": langs = "hin"
-            elif source_language == "Marathi": langs = "mar"
-            else: langs = "eng+hin+mar"
-            try:
-                return pytesseract.image_to_string(image, lang=langs).strip()
-            except Exception:
-                return pytesseract.image_to_string(image, lang="eng").strip()
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image = ImageOps.grayscale(image)
+            image = ImageOps.autocontrast(image)
+            if image.width < 1600:
+                scale = min(2.0, 1600 / max(1, image.width))
+                image = image.resize((int(image.width * scale), int(image.height * scale)), Image.Resampling.LANCZOS)
+            image = ImageEnhance.Contrast(image).enhance(1.5)
+            image = image.filter(ImageFilter.SHARPEN)
+            if source_language == "Hindi":
+                languages = ["hin", "hin+eng"]
+            elif source_language == "Marathi":
+                languages = ["mar", "mar+eng"]
+            elif source_language == "English":
+                languages = ["eng"]
+            else:
+                languages = ["eng", "hin+eng", "mar+eng", "eng+hin+mar"]
+            candidates = []
+            for lang in languages:
+                for psm in (6, 11):
+                    try:
+                        result = pytesseract.image_to_string(image, lang=lang, config=f"--oem 1 --psm {psm}").strip()
+                        candidates.append((ocr_quality(result), result))
+                    except Exception as exc:
+                        print(f"OCR candidate {lang}/psm{psm} failed: {type(exc).__name__}: {str(exc)[:160]}", flush=True)
+            return max(candidates, key=lambda item: item[0])[1] if candidates else ""
         if is_image:
             image = Image.open(io.BytesIO(data)).convert("RGB")
             original = ocr_image(image)
