@@ -7,8 +7,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-# Download the public OPUS-MT weights at build time so the first user request
-# does not wait for Hugging Face downloads and translation works offline at runtime.
-RUN python scripts/install_offline_models.py
+# Translation weights are fetched lazily on first use to keep the deploy image small.
+# Railway should mount persistent storage at /app/models to retain downloaded weights across restarts.
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
