@@ -175,17 +175,25 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         progress("Extracting text from the document (OCR)…")
         import pytesseract
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
-        def ocr_quality(text):
+        def text_quality(text):
             import re
-            compact = re.sub(r"\s+", "", text)
-            if not compact:
+            words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", text.lower())
+            if not words:
                 return -100000
-            useful = sum(ch.isalpha() for ch in text)
-            digits = sum(ch.isdigit() for ch in text)
-            words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", text)
-            repeated = sum(1 for m in re.finditer(r"(.)\1{4,}", compact))
-            # Penalise digit-only and repeated-character OCR hallucinations.
-            return useful * 2 + len(words) * 8 - digits * 3 - repeated * 100
+            from collections import Counter
+            counts = Counter(words)
+            repeated_word_penalty = sum(n - 2 for n in counts.values() if n > 2)
+            repeated_phrase_penalty = sum(1 for _ in re.finditer(r"\b(\w+\s+\w+\s+\w+)\b(?:\s+\1\b)+", text.lower()))
+            alpha = sum(ch.isalpha() for ch in text)
+            visible = sum(not ch.isspace() for ch in text)
+            digit_ratio = sum(ch.isdigit() for ch in text) / max(1, visible)
+            unique_ratio = len(counts) / max(1, len(words))
+            return (alpha * 2 + len(words) * 8 + unique_ratio * 300
+                    - repeated_word_penalty * 18 - repeated_phrase_penalty * 120
+                    - digit_ratio * 500)
+        def ocr_quality(text):
+            # Score OCR candidates for readable words and penalise repeated garbage.
+            return text_quality(text)
         def ocr_image(image):
             image = ImageOps.exif_transpose(image).convert("RGB")
             image = ImageOps.grayscale(image)
@@ -219,18 +227,32 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
             text_pages = [p.extract_text() or "" for p in reader.pages]
-            original = "\n\n".join(text_pages).strip()
-            if not original:
+            extracted = "\n\n".join(text_pages).strip()
+            # PDFs with embedded/custom fonts can return non-empty but corrupted text.
+            # Do not trust "non-empty" extraction alone: OCR the pages when the text
+            # contains heavy repetition or very low lexical diversity.
+            extracted_words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", extracted.lower())
+            extracted_unique = len(set(extracted_words)) / max(1, len(extracted_words))
+            repeated_words = len(extracted_words) - len(set(extracted_words))
+            needs_ocr = (not extracted or len(extracted_words) < 12
+                         or (len(extracted_words) > 30 and extracted_unique < 0.48)
+                         or (len(extracted_words) > 30 and repeated_words > len(extracted_words) * 0.42))
+            original = extracted
+            if needs_ocr:
+                progress("PDF text layer looks unreliable. Re-reading pages with OCR…")
                 import fitz
                 pdf = fitz.open(stream=data, filetype="pdf")
                 pages = []
                 if len(pdf) > 25:
                     raise HTTPException(413, "Scanned PDF is over 25 pages. Split it into smaller files for faster processing.")
-                for page in pdf:
-                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                for page_number, page in enumerate(pdf, start=1):
+                    progress(f"OCR reading PDF page {page_number} of {len(pdf)}…")
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
                     img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
                     pages.append(ocr_image(img))
-                original = "\n\n".join(pages).strip()
+                ocr_text = "\n\n".join(pages).strip()
+                if text_quality(ocr_text) > text_quality(extracted):
+                    original = ocr_text
         elif name.endswith(".docx") or "wordprocessingml.document" in mime:
             from docx import Document
             doc = Document(io.BytesIO(data))
@@ -290,12 +312,13 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                     tokenizer, model = pair
                     progress(f"Translating document with the {source.upper()} → {target.upper()} model…")
                     outputs = []
-                    for offset in range(0, len(text), 1000):
-                        batch = tokenizer(text[offset:offset+1000], return_tensors="pt", truncation=True, max_length=256)
+                    for offset in range(0, len(text), 700):
+                        chunk = text[offset:offset+700]
+                        batch = tokenizer(chunk, return_tensors="pt", truncation=True, max_length=384)
                         with torch.inference_mode():
-                            generated = model.generate(**batch, num_beams=1, max_new_tokens=192)
+                            generated = model.generate(**batch, num_beams=4, max_new_tokens=320, early_stopping=True)
                         outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
-                    return "\\n\\n".join(outputs)
+                    return "\n\n".join(outputs)
                 if src == "en" or tgt == "en":
                     translated = translate_pair(original, src, tgt)
                 else:
