@@ -282,7 +282,8 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                             model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
                             tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False)
                             progress(f"Model files ready. Initialising {source.upper()} → {target.upper()} model…")
-                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False)
+                            torch.set_num_threads(min(2, os.cpu_count() or 1))
+                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False, low_cpu_mem_usage=True)
                             model.eval()
                             pair = (tokenizer, model)
                             _TRANSLATION_MODELS[cache_key] = pair
