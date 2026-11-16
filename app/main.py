@@ -102,6 +102,17 @@ def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_lan
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS[job_id] = {"status": "processing", "message": "Extracting document text and loading translation model."}
         result = _process_scan_translation(data, filename, mime, source_language, target_language)
+        extracted = str(result.get("extracted_text") or "").strip()
+        translated = str(result.get("translated_text") or "").strip()
+        # Never report success with blank output. Preserve OCR text if a model
+        # returns an empty translation so the user still receives usable text.
+        if not extracted:
+            raise HTTPException(422, "No readable text was extracted. Try a clearer image or select the document's source language.")
+        if not translated:
+            translated = extracted
+            result["translated_text"] = translated
+            result["translation_warning"] = "Translation model returned empty output; showing extracted original text instead."
+        print(f"SCAN_JOB {job_id} complete: extracted_chars={len(extracted)} translated_chars={len(translated)}", flush=True)
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS[job_id] = {"status": "complete", "message": "Translation complete.", "result": result}
     except HTTPException as exc:
