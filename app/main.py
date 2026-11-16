@@ -94,18 +94,65 @@ def ask_model(prompt: str, language: str = "English"):
 
 
 
+_SCAN_JOBS = {}
+_SCAN_JOBS_LOCK = threading.Lock()
+
+def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_language: str, target_language: str):
+    try:
+        with _SCAN_JOBS_LOCK:
+            _SCAN_JOBS[job_id] = {"status": "processing", "message": "Extracting document text and loading translation model."}
+        result = _process_scan_translation(data, filename, mime, source_language, target_language)
+        with _SCAN_JOBS_LOCK:
+            _SCAN_JOBS[job_id] = {"status": "complete", "message": "Translation complete.", "result": result}
+    except HTTPException as exc:
+        with _SCAN_JOBS_LOCK:
+            _SCAN_JOBS[job_id] = {"status": "error", "message": str(exc.detail)}
+    except Exception as exc:
+        with _SCAN_JOBS_LOCK:
+            _SCAN_JOBS[job_id] = {"status": "error", "message": f"Document processing failed: {type(exc).__name__}: {str(exc)[:180]}"}
+    finally:
+        import time
+        time.sleep(900)
+        with _SCAN_JOBS_LOCK:
+            _SCAN_JOBS.pop(job_id, None)
+
 @app.post("/api/scan/translate")
-async def scan_and_translate(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
-    """Free local OCR and document extraction. Translation uses only installed offline models."""
+async def start_scan_translation(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
+    """Accept upload quickly and process asynchronously to avoid mobile proxy timeouts."""
     if target_language not in {"English", "Hindi", "Marathi"}:
         raise HTTPException(400, "Choose English, Hindi or Marathi.")
     data = await file.read()
     if not data or len(data) > 15 * 1024 * 1024:
         raise HTTPException(413, "Choose a file up to 15 MB.")
-    name = (file.filename or "document").lower()
-    mime = (file.content_type or "").lower()
-    original = ""
-    is_image = mime.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"))
+    import uuid
+    job_id = uuid.uuid4().hex
+    with _SCAN_JOBS_LOCK:
+        _SCAN_JOBS[job_id] = {"status": "queued", "message": "Upload received. Translation is queued."}
+    threading.Thread(
+        target=_run_scan_job,
+        args=(job_id, data, file.filename or "document", file.content_type or "", source_language, target_language),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "queued"}
+
+@app.get("/api/scan/jobs/{job_id}")
+def scan_translation_status(job_id: str):
+    with _SCAN_JOBS_LOCK:
+        job = _SCAN_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "Translation job expired or was not found. Please upload the document again.")
+        response = {key: value for key, value in job.items() if key != "result"}
+        if job["status"] == "complete":
+            response["result"] = job["result"]
+        return response
+
+def _process_scan_translation(data: bytes, filename: str, mime: str, source_language: str, target_language: str):
+    """Run local OCR and offline translation in a worker thread."""
+    if target_language not in {"English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose English, Hindi or Marathi.")
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Choose a file up to 15 MB.")
+    name = (filename or "document").lower()
     try:
         import pytesseract
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -252,7 +299,7 @@ async def scan_and_translate(file: UploadFile = File(...), source_language: str 
                         "Please retry; extracted text is not stored."
                     )
                     raise HTTPException(503, detail)
-        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": file.filename, "mode": "offline"}
+        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
     except HTTPException:
         raise
     except Exception as exc:
