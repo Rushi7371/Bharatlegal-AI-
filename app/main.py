@@ -268,7 +268,24 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             raise HTTPException(415, "Supported files: JPG, PNG, WEBP, text-based or scanned PDF, DOCX, TXT and MD.")
         if not original:
             raise HTTPException(422, "No readable text found. Check image quality and selected OCR language.")
-        original = original[:60000]
+        # Fail fast on visibly corrupted extraction instead of feeding garbage into MT.
+        import re
+        quality_words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", original.lower())
+        if len(quality_words) >= 20:
+            from collections import Counter
+            word_counts = Counter(quality_words)
+            repeated_ratio = sum(max(0, n - 1) for n in word_counts.values()) / len(quality_words)
+            unique_ratio = len(word_counts) / len(quality_words)
+            suspicious_markers = sum(original.lower().count(x) for x in ("longname", "longdayname", "indian nationality", "xxxxxxxx"))
+            if repeated_ratio > 0.48 or (unique_ratio < 0.24 and len(quality_words) > 40) or suspicious_markers >= 3:
+                raise HTTPException(
+                    422,
+                    "Text extraction quality is too low to translate safely. The PDF may have a broken text layer or poor scan. "
+                    "Please upload a clearer scan or select the document's actual source language; no translation was generated."
+                )
+        elif len(original.strip()) < 25:
+            raise HTTPException(422, "Too little readable text was extracted. Please upload a clearer scan.")
+        original = original[:20000]
         progress(f"Text extraction complete ({len(original):,} characters). Preparing translation model…")
         # Public, ungated OPUS-MT models. Hindi/Marathi cross-translation uses an English pivot.
         lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
