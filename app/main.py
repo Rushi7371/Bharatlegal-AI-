@@ -126,7 +126,7 @@ def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_lan
             _SCAN_JOBS[job_id] = {"status": "error", "message": f"Document processing failed: {type(exc).__name__}: {str(exc)[:180]}"}
     finally:
         import time
-        time.sleep(900)
+        time.sleep(1800)
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS.pop(job_id, None)
 
@@ -177,13 +177,13 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
         def ocr_quality(text):
             import re
-            compact = re.sub(r"\\s+", "", text)
+            compact = re.sub(r"\s+", "", text)
             if not compact:
                 return -100000
             useful = sum(ch.isalpha() for ch in text)
             digits = sum(ch.isdigit() for ch in text)
-            words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", text)
-            repeated = sum(1 for m in re.finditer(r"(.)\\1{4,}", compact))
+            words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", text)
+            repeated = sum(1 for m in re.finditer(r"(.)\1{4,}", compact))
             # Penalise digit-only and repeated-character OCR hallucinations.
             return useful * 2 + len(words) * 8 - digits * 3 - repeated * 100
         def ocr_image(image):
