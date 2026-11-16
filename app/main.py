@@ -98,10 +98,13 @@ _SCAN_JOBS = {}
 _SCAN_JOBS_LOCK = threading.Lock()
 
 def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_language: str, target_language: str):
-    try:
+    def report_progress(message: str):
         with _SCAN_JOBS_LOCK:
-            _SCAN_JOBS[job_id] = {"status": "processing", "message": "Extracting document text and loading translation model."}
-        result = _process_scan_translation(data, filename, mime, source_language, target_language)
+            if job_id in _SCAN_JOBS:
+                _SCAN_JOBS[job_id] = {"status": "processing", "message": message}
+    try:
+        report_progress("Starting document processing…")
+        result = _process_scan_translation(data, filename, mime, source_language, target_language, progress_callback=report_progress)
         extracted = str(result.get("extracted_text") or "").strip()
         translated = str(result.get("translated_text") or "").strip()
         # Never report success with blank output. Preserve OCR text if a model
@@ -157,8 +160,11 @@ def scan_translation_status(job_id: str):
             response["result"] = job["result"]
         return response
 
-def _process_scan_translation(data: bytes, filename: str, mime: str, source_language: str, target_language: str):
+def _process_scan_translation(data: bytes, filename: str, mime: str, source_language: str, target_language: str, progress_callback=None):
     """Run local OCR and offline translation in a worker thread."""
+    def progress(message):
+        if progress_callback:
+            progress_callback(message)
     if target_language not in {"English", "Hindi", "Marathi"}:
         raise HTTPException(400, "Choose English, Hindi or Marathi.")
     if not data or len(data) > 15 * 1024 * 1024:
@@ -166,6 +172,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
     name = (filename or "document").lower()
     is_image = name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp")) or (mime or "").lower().startswith("image/")
     try:
+        progress("Extracting text from the document (OCR)…")
         import pytesseract
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
         def ocr_quality(text):
@@ -239,6 +246,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         if not original:
             raise HTTPException(422, "No readable text found. Check image quality and selected OCR language.")
         original = original[:60000]
+        progress(f"Text extraction complete ({len(original):,} characters). Preparing translation model…")
         # Public, ungated OPUS-MT models. Hindi/Marathi cross-translation uses an English pivot.
         lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
         src = lang_code.get(source_language)
@@ -252,9 +260,15 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             translated = original
         else:
             try:
+                # Disable the Xet transport path, which can stall in some container networks.
+                # Hugging Face downloads use explicit timeouts and remain cached on disk.
+                os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+                os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "180")
+                os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
                 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
                 import torch
-                model_cache = BASE / "models"
+                model_cache = Path(os.getenv("BHARATLEGAL_MODEL_CACHE", str(BASE / "models")))
+                model_cache.mkdir(parents=True, exist_ok=True)
                 def translate_pair(text, source, target):
                     model_id = f"Helsinki-NLP/opus-mt-{source}-{target}"
                     cache_key = f"{source}-{target}"
@@ -263,14 +277,17 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                     with _TRANSLATION_MODEL_LOCK:
                         pair = _TRANSLATION_MODELS.get(cache_key)
                         if pair is None:
+                            progress(f"Downloading/loading open-source {source.upper()} → {target.upper()} translation model. First run may take several minutes…")
                             local_dir = model_cache / f"opus-mt-{source}-{target}"
                             model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
-                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache))
-                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache))
+                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False)
+                            progress(f"Model files ready. Initialising {source.upper()} → {target.upper()} model…")
+                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False)
                             model.eval()
                             pair = (tokenizer, model)
                             _TRANSLATION_MODELS[cache_key] = pair
                     tokenizer, model = pair
+                    progress(f"Translating document with the {source.upper()} → {target.upper()} model…")
                     outputs = []
                     for offset in range(0, len(text), 1000):
                         batch = tokenizer(text[offset:offset+1000], return_tensors="pt", truncation=True, max_length=256)
@@ -311,6 +328,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                         "Please retry; extracted text is not stored."
                     )
                     raise HTTPException(503, detail)
+        progress("Translation finished. Preparing editable results…")
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
     except HTTPException:
         raise
