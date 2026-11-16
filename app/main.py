@@ -164,6 +164,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
     if not data or len(data) > 15 * 1024 * 1024:
         raise HTTPException(413, "Choose a file up to 15 MB.")
     name = (filename or "document").lower()
+    is_image = name.endswith((".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp")) or (mime or "").lower().startswith("image/")
     try:
         import pytesseract
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
