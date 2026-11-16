@@ -224,6 +224,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             image = Image.open(io.BytesIO(data)).convert("RGB")
             original = ocr_image(image)
         elif name.endswith(".pdf") or mime == "application/pdf":
+            import re
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
             text_pages = [p.extract_text() or "" for p in reader.pages]
