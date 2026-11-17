@@ -63,8 +63,8 @@ class ExportTests(unittest.TestCase):
         cases = (
             (export_scan_docx, ScanExportRequest(text="")),
             (export_scan_pdf, ScanExportRequest(text="")),
-            (draft_export_docx, DraftExportRequest(text="")),
-            (draft_export_pdf, DraftExportRequest(text="")),
+            (export_draft_docx, DraftExportRequest(text="")),
+            (export_draft_pdf, DraftExportRequest(text="")),
         )
         for handler, request in cases:
             with self.subTest(handler=handler.__name__):
