@@ -131,10 +131,13 @@ def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_lan
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS[job_id] = {"status": "error", "message": f"Document processing failed: {type(exc).__name__}: {str(exc)[:180]}"}
     finally:
-        import time
-        time.sleep(1800)
-        with _SCAN_JOBS_LOCK:
-            _SCAN_JOBS.pop(job_id, None)
+        # Expire completed jobs without holding a worker thread asleep for 30 minutes.
+        def expire_job():
+            with _SCAN_JOBS_LOCK:
+                _SCAN_JOBS.pop(job_id, None)
+        timer = threading.Timer(1800, expire_job)
+        timer.daemon = True
+        timer.start()
 
 
 @app.post("/api/scan/export/docx")
@@ -574,7 +577,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                     "Please retry later; the original OCR text remains available only in this scan session."
                 )
         progress("Translation finished. Preparing editable results…")
-        return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
+        return {"source_language": detected_source, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "hosted_ai"}
     except HTTPException:
         raise
     except Exception as exc:
