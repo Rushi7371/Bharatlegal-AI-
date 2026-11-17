@@ -42,6 +42,11 @@ class ScanExportRequest(BaseModel):
     text: str
     filename: str = "BharatLegal-translation"
 
+class DraftExportRequest(BaseModel):
+    text: str
+    filename: str = "BharatLegal-draft"
+    language: str = "English"
+
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
 def ask_model(prompt: str, language: str = "English"):
@@ -162,6 +167,88 @@ def export_scan_docx(request: ScanExportRequest):
     safe_name = "".join(ch for ch in request.filename if ch.isalnum() or ch in "-_ ")[:70].strip() or "BharatLegal-translation"
     headers = {"Content-Disposition": f'attachment; filename="{safe_name}.docx"'}
     return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
+
+@app.post("/api/draft/export/docx")
+def export_draft_docx(request: DraftExportRequest):
+    """Export the current working draft as an editable Word document."""
+    text_value = (request.text or "").strip()
+    if not text_value:
+        raise HTTPException(422, "There is no draft text to export.")
+    if len(text_value) > 500000:
+        raise HTTPException(413, "The draft is too large to export in one file.")
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from fastapi.responses import StreamingResponse
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    style = document.styles["Normal"]
+    style.font.name = "Noto Sans"
+    style.font.size = Pt(11)
+    for line in text_value.splitlines():
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(5)
+        run = paragraph.add_run(line)
+        run.font.name = "Noto Sans"
+        run.font.size = Pt(11)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    safe_name = "".join(ch for ch in request.filename if ch.isalnum() or ch in "-_ ")[:70].strip() or "BharatLegal-draft"
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}.docx"'}
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
+
+
+@app.post("/api/draft/export/pdf")
+def export_draft_pdf(request: DraftExportRequest):
+    """Export a working draft to PDF; embed a Unicode font when available."""
+    text_value = (request.text or "").strip()
+    if not text_value:
+        raise HTTPException(422, "There is no draft text to export.")
+    if len(text_value) > 200000:
+        raise HTTPException(413, "The draft is too large to export as PDF in one file.")
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib import colors
+    import html, os, re
+    contains_devanagari = bool(re.search(r"[\\u0900-\\u097F]", text_value))
+    font_candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    font_path = next((p for p in font_candidates if os.path.isfile(p)), None)
+    if contains_devanagari and (not font_path or "Devanagari" not in font_path):
+        raise HTTPException(503, "A Devanagari Unicode font is not installed on this server yet. Word export is available; PDF export for Marathi/Hindi will be enabled after the font is packaged.")
+    font_name = "BharatLegalUnicode"
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont(font_name, font_path))
+        except Exception:
+            font_name = "Helvetica"
+    else:
+        font_name = "Helvetica"
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20*mm, leftMargin=20*mm, topMargin=18*mm, bottomMargin=18*mm)
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("BharatBody", parent=styles["BodyText"], fontName=font_name, fontSize=9.5, leading=14, spaceAfter=5, alignment=TA_LEFT, textColor=colors.HexColor("#18212b"))
+    story = []
+    for line in text_value.splitlines():
+        safe_line = html.escape(line).replace("  ", "&nbsp;&nbsp;")
+        story.append(Paragraph(safe_line if safe_line else " ", body))
+        story.append(Spacer(1, 2))
+    doc.build(story)
+    buffer.seek(0)
+    safe_name = "".join(ch for ch in request.filename if ch.isalnum() or ch in "-_ ")[:70].strip() or "BharatLegal-draft"
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'}
+    return StreamingResponse(buffer, media_type="application/pdf", headers=headers)
+
 
 @app.post("/api/scan/translate")
 async def start_scan_translation(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
