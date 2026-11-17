@@ -367,28 +367,56 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                         "Please retry; extracted text is not stored."
                     )
                     raise HTTPException(503, detail)
-        # Reject obvious model corruption (e.g. long numeric/repeated-character output).
+        # Validate local model output. If the offline model produces corrupted text,
+        # use the configured Gemini/OpenAI provider as a controlled fallback rather
+        # than returning numeric/repeated garbage to the user.
         import re
-        output_words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", translated)
-        output_visible = [ch for ch in translated if not ch.isspace()]
-        output_digit_ratio = sum(ch.isdigit() for ch in output_visible) / max(1, len(output_visible))
-        output_unique_ratio = len(set(w.lower() for w in output_words)) / max(1, len(output_words))
-        repeated_tokens = 1 - output_unique_ratio
-        # Hindi and Marathi use Devanagari. Check the requested output script too.
-        target_script_letters = sum(1 for ch in translated if ch.isalpha())
-        devanagari_letters = sum(1 for ch in translated if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
-        devanagari_ratio = devanagari_letters / max(1, target_script_letters)
-        wrong_target_script = target_language in {"Hindi", "Marathi"} and len(original) >= 40 and devanagari_ratio < 0.12
-        if len(original) >= 40 and (
-            len(output_words) < 5
-            or output_digit_ratio > 0.30
-            or (len(output_words) >= 12 and repeated_tokens > 0.55)
-            or wrong_target_script
-        ):
-            raise HTTPException(
-                503,
-                "OCR completed, but the translation output failed quality checks (repeated, non-linguistic, or not in the selected target script). Please verify the source language and retry with a clearer scan."
-            )
+        def translation_quality(value):
+            words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", value)
+            visible = [ch for ch in value if not ch.isspace()]
+            digit_ratio = sum(ch.isdigit() for ch in visible) / max(1, len(visible))
+            unique_ratio = len(set(w.lower() for w in words)) / max(1, len(words))
+            letters = sum(1 for ch in value if ch.isalpha())
+            devanagari = sum(1 for ch in value if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
+            script_ratio = devanagari / max(1, letters)
+            bad = (len(original) >= 40 and (
+                len(words) < 5 or digit_ratio > 0.30
+                or (len(words) >= 12 and (1 - unique_ratio) > 0.55)
+                or (target_language in {"Hindi", "Marathi"} and script_ratio < 0.12)
+            ))
+            return bad, {"words": len(words), "digit_ratio": round(digit_ratio, 3),
+                         "unique_ratio": round(unique_ratio, 3), "devanagari_ratio": round(script_ratio, 3)}
+        bad_output, quality = translation_quality(translated)
+        if bad_output:
+            print(f"Local translation failed quality checks: {quality}; attempting configured AI fallback.", flush=True)
+            try:
+                translated_parts = []
+                for offset in range(0, len(original), 3000):
+                    part = original[offset:offset + 3000]
+                    prompt = (
+                        f"Translate the following document text from {source_language} into {target_language}. "
+                        "Return only the translation, with no preface, explanation, markdown fences or commentary. "
+                        "Preserve all headings, numbering, bullet points, names, dates and meaning. "
+                        "Use natural, complete Indian Marathi/Hindi as requested; do not transliterate English "
+                        "sentences or replace them with numbers. Keep the same paragraph structure.\\n\\n"
+                        f"DOCUMENT TEXT:\\n{part}"
+                    )
+                    translated_parts.append(ask_model(prompt, target_language))
+                candidate = "\\n\\n".join(x.strip() for x in translated_parts if x and x.strip()).strip()
+                fallback_bad, fallback_quality = translation_quality(candidate)
+                if candidate and not fallback_bad:
+                    translated = candidate
+                    print(f"Configured AI translation fallback passed quality checks: {fallback_quality}", flush=True)
+                else:
+                    print(f"Configured AI translation fallback also failed: {fallback_quality}", flush=True)
+                    raise RuntimeError("Fallback translation did not pass output-quality checks.")
+            except Exception as fallback_error:
+                raise HTTPException(
+                    503,
+                    "The offline translation model produced corrupted output and the configured AI fallback could not produce a reliable translation. "
+                    f"Details: {type(fallback_error).__name__}: {str(fallback_error)[:180]}. "
+                    "Please retry later; the original OCR text remains available only in this scan session."
+                )
         progress("Translation finished. Preparing editable results…")
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
     except HTTPException:
