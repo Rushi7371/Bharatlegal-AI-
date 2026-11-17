@@ -38,6 +38,10 @@ class ExamQuestionsRequest(BaseModel):
     language: str = "English"
     batch: int = 1
 
+class ScanExportRequest(BaseModel):
+    text: str
+    filename: str = "BharatLegal-translation"
+
 SYSTEM = """You are BharatLegal AI, an India-focused legal research and drafting assistant. Be careful, precise, and transparent. You are not a lawyer and do not create an advocate-client relationship. Never invent statutes, sections, case names, citations, quotations, procedural deadlines, or court rules. If you cannot verify a proposition from supplied materials, say so and identify what needs verification against an authoritative source. Distinguish general legal information from legal advice. Ask for missing material facts when essential. For every criminal-law question, establish the date of the alleged conduct and jurisdiction. For conduct on or after 1 July 2024, use the Bharatiya Nyaya Sanhita, 2023 (BNS), where applicable; for earlier conduct, explain that the Indian Penal Code, 1860 (IPC) may continue to apply under repeal-and-savings provisions. The date of complaint or trial does not itself determine the applicable substantive offence. When explaining old IPC provisions, identify corresponding BNS provisions only after checking the statutory text; do not imply an automatic one-to-one equivalence and flag differences in ingredients, subsections and punishment. Critical mapping: IPC section 420 (cheating and dishonestly inducing delivery of property) is generally addressed by BNS section 318(4), if all its ingredients are met; do NOT cite BNS section 319 as the equivalent of IPC 420. BNS section 319 concerns cheating by personation, a distinct offence. IPC section 406 (punishment for criminal breach of trust) is generally addressed by BNS section 316, with the precise subsection depending on the conduct and punishment provision. Never write “BNS sections 318 and 319” as the mapping for IPC 420. State that the precise ingredients, subsection and punishment must be checked against the official statutory text. For legal drafts, use placeholders for unknown facts and add a verification checklist. Flag jurisdiction, limitation, procedural, and factual uncertainties. Do not claim that a draft is ready for filing without review by a qualified Indian advocate."""
 
 def ask_model(prompt: str, language: str = "English"):
@@ -126,6 +130,38 @@ def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_lan
         time.sleep(1800)
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS.pop(job_id, None)
+
+
+@app.post("/api/scan/export/docx")
+def export_scan_docx(request: ScanExportRequest):
+    """Create an editable Word document from the user's edited scanner text."""
+    text_value = (request.text or "").strip()
+    if not text_value:
+        raise HTTPException(422, "There is no text to export.")
+    if len(text_value) > 500000:
+        raise HTTPException(413, "The document is too large to export in one file.")
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from fastapi.responses import StreamingResponse
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    style = document.styles["Normal"]
+    style.font.name = "Noto Sans Devanagari"
+    style.font.size = Pt(11)
+    for line in text_value.splitlines():
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(5)
+        run = paragraph.add_run(line)
+        run.font.name = "Noto Sans Devanagari"
+        run.font.size = Pt(11)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    safe_name = "".join(ch for ch in request.filename if ch.isalnum() or ch in "-_ ")[:70].strip() or "BharatLegal-translation"
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}.docx"'}
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
 
 @app.post("/api/scan/translate")
 async def start_scan_translation(file: UploadFile = File(...), source_language: str = Form("Auto-detect"), target_language: str = Form("Marathi")):
