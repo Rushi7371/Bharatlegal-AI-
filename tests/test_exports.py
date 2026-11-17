@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from app.main import (
     DraftExportRequest,
     ScanExportRequest,
-    draft_export_docx,
-    draft_export_pdf,
+    export_draft_docx,
+    export_draft_pdf,
     export_scan_docx,
     export_scan_pdf,
     health,
@@ -50,12 +50,12 @@ class ExportTests(unittest.TestCase):
         self.assertTrue(body.startswith(b"%PDF-"))
 
     def test_draft_docx_export_is_valid_zip(self):
-        response = draft_export_docx(DraftExportRequest(text="Working legal draft"))
+        response = export_draft_docx(DraftExportRequest(text="Working legal draft"))
         body = asyncio.run(response_bytes(response))
         self.assertTrue(body.startswith(b"PK"))
 
     def test_draft_pdf_export_is_valid_pdf(self):
-        response = draft_export_pdf(DraftExportRequest(text="Working legal draft"))
+        response = export_draft_pdf(DraftExportRequest(text="Working legal draft"))
         body = asyncio.run(response_bytes(response))
         self.assertTrue(body.startswith(b"%PDF-"))
 
