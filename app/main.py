@@ -217,7 +217,7 @@ def export_draft_pdf(request: DraftExportRequest):
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib import colors
     import html, os, re
-    contains_devanagari = bool(re.search(r"[\\u0900-\\u097F]", text_value))
+    contains_devanagari = bool(re.search(r"[\u0900-\u097F]", text_value))
     font_candidates = [
         "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
