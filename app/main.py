@@ -197,19 +197,19 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                 line = raw_line.strip()
                 if not line:
                     continue
-                if re.fullmatch(r"(?:\\d{1,2}:\\d{2}|\\d{1,2}%|[|=»{}_—–-]+)", line):
+                if re.fullmatch(r"(?:\d{1,2}:\d{2}|\d{1,2}%|[|=»{}_—–-]+)", line):
                     continue
-                if re.search(r"\\b(?:5G|4G|LTE|VoLTE|Wi-?Fi)\\b", line, re.I) and len(line.split()) < 8:
+                if re.search(r"\b(?:5G|4G|LTE|VoLTE|Wi-?Fi)\b", line, re.I) and len(line.split()) < 8:
                     continue
-                if re.search(r"\\b(?:reply to chatgpt|copy edited text|copy original ocr|scan & translate|battery)\\b", line, re.I):
+                if re.search(r"\b(?:reply to chatgpt|copy edited text|copy original ocr|scan & translate|battery)\b", line, re.I):
                     continue
-                words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", line)
+                words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", line)
                 if len(words) == 0:
                     continue
                 if len(words) == 1 and len(words[0]) < 4:
                     continue
                 kept.append(line)
-            return "\\n".join(kept).strip()
+            return "\n".join(kept).strip()
 
         def ocr_quality(text):
             # Prefer readable document text, not phone chrome or isolated OCR fragments.
@@ -363,7 +363,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             letters = sum(1 for ch in value if ch.isalpha())
             devanagari = sum(1 for ch in value if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
             script_ratio = devanagari / max(1, letters)
-            source_words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", original)
+            source_words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", original)
             output_too_short = len(original) >= 120 and len(words) < max(8, int(len(source_words) * 0.30))
             bad = (len(original) >= 40 and (
                 len(words) < 5 or digit_ratio > 0.30
