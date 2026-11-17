@@ -107,14 +107,11 @@ def _run_scan_job(job_id: str, data: bytes, filename: str, mime: str, source_lan
         result = _process_scan_translation(data, filename, mime, source_language, target_language, progress_callback=report_progress)
         extracted = str(result.get("extracted_text") or "").strip()
         translated = str(result.get("translated_text") or "").strip()
-        # Never report success with blank output. Preserve OCR text if a model
-        # returns an empty translation so the user still receives usable text.
+        # Never label OCR text as a translation, and never report success with blank output.
         if not extracted:
             raise HTTPException(422, "No readable text was extracted. Try a clearer image or select the document's source language.")
         if not translated:
-            translated = extracted
-            result["translated_text"] = translated
-            result["translation_warning"] = "Translation model returned empty output; showing extracted original text instead."
+            raise HTTPException(503, "OCR completed, but the translation model returned no translated text. Please retry; no false translation has been displayed.")
         print(f"SCAN_JOB {job_id} complete: extracted_chars={len(extracted)} translated_chars={len(translated)}", flush=True)
         with _SCAN_JOBS_LOCK:
             _SCAN_JOBS[job_id] = {"status": "complete", "message": "Translation complete.", "result": result}
@@ -370,6 +367,22 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                         "Please retry; extracted text is not stored."
                     )
                     raise HTTPException(503, detail)
+        # Reject obvious model corruption (e.g. long numeric/repeated-character output).
+        import re
+        output_words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", translated)
+        output_visible = [ch for ch in translated if not ch.isspace()]
+        output_digit_ratio = sum(ch.isdigit() for ch in output_visible) / max(1, len(output_visible))
+        output_unique_ratio = len(set(w.lower() for w in output_words)) / max(1, len(output_words))
+        repeated_tokens = 1 - output_unique_ratio
+        if len(original) >= 40 and (
+            len(output_words) < 5
+            or output_digit_ratio > 0.30
+            or (len(output_words) >= 12 and repeated_tokens > 0.55)
+        ):
+            raise HTTPException(
+                503,
+                "OCR completed, but the translation output failed quality checks (repeated or non-linguistic text). Please retry with the correct source language or a clearer scan."
+            )
         progress("Translation finished. Preparing editable results…")
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
     except HTTPException:
