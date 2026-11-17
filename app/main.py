@@ -188,9 +188,33 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             return (alpha * 2 + len(words) * 8 + unique_ratio * 300
                     - repeated_word_penalty * 18 - repeated_phrase_penalty * 120
                     - digit_ratio * 500)
+        def clean_ocr_text(text):
+            # Remove common phone/browser status-bar artefacts from screenshots
+            # before translation; retain meaningful headings and list items.
+            import re
+            kept = []
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if re.fullmatch(r"(?:\\d{1,2}:\\d{2}|\\d{1,2}%|[|=»{}_—–-]+)", line):
+                    continue
+                if re.search(r"\\b(?:5G|4G|LTE|VoLTE|Wi-?Fi)\\b", line, re.I) and len(line.split()) < 8:
+                    continue
+                if re.search(r"\\b(?:reply to chatgpt|copy edited text|copy original ocr|scan & translate|battery)\\b", line, re.I):
+                    continue
+                words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", line)
+                if len(words) == 0:
+                    continue
+                if len(words) == 1 and len(words[0]) < 4:
+                    continue
+                kept.append(line)
+            return "\\n".join(kept).strip()
+
         def ocr_quality(text):
-            # Score OCR candidates for readable words and penalise repeated garbage.
-            return text_quality(text)
+            # Prefer readable document text, not phone chrome or isolated OCR fragments.
+            cleaned = clean_ocr_text(text)
+            return text_quality(cleaned) - max(0, len(text) - len(cleaned)) * 2
         def ocr_image(image):
             image = ImageOps.exif_transpose(image).convert("RGB")
             image = ImageOps.grayscale(image)
@@ -216,7 +240,8 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                         candidates.append((ocr_quality(result), result))
                     except Exception as exc:
                         print(f"OCR candidate {lang}/psm{psm} failed: {type(exc).__name__}: {str(exc)[:160]}", flush=True)
-            return max(candidates, key=lambda item: item[0])[1] if candidates else ""
+            best = max(candidates, key=lambda item: item[0])[1] if candidates else ""
+            return clean_ocr_text(best)
         if is_image:
             image = Image.open(io.BytesIO(data)).convert("RGB")
             original = ocr_image(image)
@@ -338,10 +363,13 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             letters = sum(1 for ch in value if ch.isalpha())
             devanagari = sum(1 for ch in value if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
             script_ratio = devanagari / max(1, letters)
+            source_words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", original)
+            output_too_short = len(original) >= 120 and len(words) < max(8, int(len(source_words) * 0.30))
             bad = (len(original) >= 40 and (
                 len(words) < 5 or digit_ratio > 0.30
                 or (len(words) >= 12 and (1 - unique_ratio) > 0.55)
-                or (target_language in {"Hindi", "Marathi"} and script_ratio < 0.12)
+                or output_too_short
+                or (target_language in {"Hindi", "Marathi"} and script_ratio < 0.30)
             ))
             return bad, {"words": len(words), "digit_ratio": round(digit_ratio, 3),
                          "unique_ratio": round(unique_ratio, 3), "devanagari_ratio": round(script_ratio, 3)}
