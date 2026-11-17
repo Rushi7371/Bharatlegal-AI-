@@ -168,6 +168,52 @@ def export_scan_docx(request: ScanExportRequest):
     headers = {"Content-Disposition": f'attachment; filename="{safe_name}.docx"'}
     return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
 
+
+@app.post("/api/scan/export/pdf")
+def export_scan_pdf(request: ScanExportRequest):
+    """Export the user's edited scanner/translation text as a downloadable PDF."""
+    text_value = (request.text or "").strip()
+    if not text_value:
+        raise HTTPException(422, "There is no text to export.")
+    if len(text_value) > 200000:
+        raise HTTPException(413, "The document is too large to export as PDF in one file.")
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib import colors
+    from fastapi.responses import StreamingResponse
+    import html, re
+    contains_devanagari = bool(re.search(r"[\\u0900-\\u097F]", text_value))
+    font_candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
+    ]
+    font_path = next((p for p in font_candidates if os.path.isfile(p)), None)
+    if contains_devanagari and not font_path:
+        raise HTTPException(503, "Marathi/Hindi PDF export needs the Devanagari font package on the server. Please use Word export for this text until that font is installed.")
+    font_name = "BharatLegalDevanagari" if font_path else "Helvetica"
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont(font_name, font_path))
+        except Exception as exc:
+            raise HTTPException(503, "The Devanagari font could not be loaded for PDF export. Please use Word export.") from exc
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20*mm, leftMargin=20*mm, topMargin=18*mm, bottomMargin=18*mm)
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("BharatScanBody", parent=styles["BodyText"], fontName=font_name, fontSize=9.5, leading=14, spaceAfter=5, alignment=TA_LEFT, textColor=colors.HexColor("#18212b"))
+    story = []
+    for line in text_value.splitlines():
+        story.append(Paragraph(html.escape(line).replace("  ", "&nbsp;&nbsp;") or " ", body))
+        story.append(Spacer(1, 2))
+    doc.build(story)
+    buffer.seek(0)
+    safe_name = "".join(ch for ch in request.filename if ch.isalnum() or ch in "-_ ")[:70].strip() or "BharatLegal-translation"
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'})
+
 @app.post("/api/draft/export/docx")
 def export_draft_docx(request: DraftExportRequest):
     """Export the current working draft as an editable Word document."""
