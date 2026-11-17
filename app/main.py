@@ -372,7 +372,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         # than returning numeric/repeated garbage to the user.
         import re
         def translation_quality(value):
-            words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", value)
+            words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", value)
             visible = [ch for ch in value if not ch.isspace()]
             digit_ratio = sum(ch.isdigit() for ch in visible) / max(1, len(visible))
             unique_ratio = len(set(w.lower() for w in words)) / max(1, len(words))
@@ -399,10 +399,10 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                         "Preserve all headings, numbering, bullet points, names, dates and meaning. "
                         "Use natural, complete Indian Marathi/Hindi as requested; do not transliterate English "
                         "sentences or replace them with numbers. Keep the same paragraph structure.\\n\\n"
-                        f"DOCUMENT TEXT:\\n{part}"
+                        f"DOCUMENT TEXT:\n{part}"
                     )
                     translated_parts.append(ask_model(prompt, target_language))
-                candidate = "\\n\\n".join(x.strip() for x in translated_parts if x and x.strip()).strip()
+                candidate = "\n\n".join(x.strip() for x in translated_parts if x and x.strip()).strip()
                 fallback_bad, fallback_quality = translation_quality(candidate)
                 if candidate and not fallback_bad:
                     translated = candidate
