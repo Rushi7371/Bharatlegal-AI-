@@ -784,6 +784,14 @@ Return ONLY valid JSON with exactly the same keys and structure. Translate all u
         raise HTTPException(502, "Could not parse the translation. Please retry or use English.")
     return {"translation": translated}
 
+@app.get("/", include_in_schema=False)
+def workspace_home():
+    return FileResponse(BASE / "static" / "workspace.html")
+
+@app.get("/classic", include_in_schema=False)
+def classic_workspace():
+    return FileResponse(BASE / "static" / "index.html")
+
 @app.get("/mobile", include_in_schema=False)
 def mobile_redirect():
     return RedirectResponse(url="/mobile/", status_code=307)
