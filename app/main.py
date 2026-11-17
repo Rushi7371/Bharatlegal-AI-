@@ -290,6 +290,12 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         # being KILLED while scan jobs were running, which erased the in-memory job
         # registry and caused the client to report "Could not check translation status".
         # Keep OCR local, but run translation through the configured API provider.
+        lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
+        src = lang_code.get(source_language)
+        if not src:
+            devanagari = sum(1 for ch in original if 0x0900 <= ord(ch) <= 0x097F)
+            latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
+            src = "en" if latin >= devanagari else "hi"
         lang_names = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
         detected_source = lang_names.get(src, source_language)
         translated_parts = []
@@ -301,7 +307,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                 chunks.append(current)
                 current = paragraph
             else:
-                current = (current + "\\n" + paragraph).strip()
+                current = (current + "\n" + paragraph).strip()
         if current:
             chunks.append(current)
         if not chunks:
@@ -319,7 +325,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             if not translated_part or not translated_part.strip():
                 raise HTTPException(503, f"Translation provider returned an empty result for section {index}.")
             translated_parts.append(translated_part.strip())
-        translated = "\\n\\n".join(translated_parts).strip()
+        translated = "\n\n".join(translated_parts).strip()
         # Validate local model output. If the offline model produces corrupted text,
         # use the configured Gemini/OpenAI provider as a controlled fallback rather
         # than returning numeric/repeated garbage to the user.
