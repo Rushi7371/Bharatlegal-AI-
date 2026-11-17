@@ -369,19 +369,25 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                     raise HTTPException(503, detail)
         # Reject obvious model corruption (e.g. long numeric/repeated-character output).
         import re
-        output_words = re.findall(r"[A-Za-z\\u0900-\\u097F]{2,}", translated)
+        output_words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", translated)
         output_visible = [ch for ch in translated if not ch.isspace()]
         output_digit_ratio = sum(ch.isdigit() for ch in output_visible) / max(1, len(output_visible))
         output_unique_ratio = len(set(w.lower() for w in output_words)) / max(1, len(output_words))
         repeated_tokens = 1 - output_unique_ratio
+        # Hindi and Marathi use Devanagari. Check the requested output script too.
+        target_script_letters = sum(1 for ch in translated if ch.isalpha())
+        devanagari_letters = sum(1 for ch in translated if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
+        devanagari_ratio = devanagari_letters / max(1, target_script_letters)
+        wrong_target_script = target_language in {"Hindi", "Marathi"} and len(original) >= 40 and devanagari_ratio < 0.12
         if len(original) >= 40 and (
             len(output_words) < 5
             or output_digit_ratio > 0.30
             or (len(output_words) >= 12 and repeated_tokens > 0.55)
+            or wrong_target_script
         ):
             raise HTTPException(
                 503,
-                "OCR completed, but the translation output failed quality checks (repeated or non-linguistic text). Please retry with the correct source language or a clearer scan."
+                "OCR completed, but the translation output failed quality checks (repeated, non-linguistic, or not in the selected target script). Please verify the source language and retry with a clearer scan."
             )
         progress("Translation finished. Preparing editable results…")
         return {"source_language": source_language, "target_language": target_language, "extracted_text": original, "translated_text": translated, "filename": filename, "mode": "offline"}
