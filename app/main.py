@@ -284,89 +284,42 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             raise HTTPException(422, "Too little readable text was extracted. Please upload a clearer scan.")
         original = original[:20000]
         progress(f"Text extraction complete ({len(original):,} characters). Preparing translation model…")
-        # Public, ungated OPUS-MT models. Hindi/Marathi cross-translation uses an English pivot.
-        lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
-        src = lang_code.get(source_language)
-        tgt = lang_code[target_language]
-        if not src:
-            # Conservative script-based detection; users can select Hindi/Marathi explicitly.
-            devanagari = sum(1 for ch in original if 0x0900 <= ord(ch) <= 0x097F)
-            latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
-            src = "en" if latin >= devanagari else "hi"
-        if src == tgt:
-            translated = original
-        else:
-            try:
-                # Disable the Xet transport path, which can stall in some container networks.
-                # Hugging Face downloads use explicit timeouts and remain cached on disk.
-                os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-                os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "180")
-                os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
-                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-                import torch
-                model_cache = Path(os.getenv("BHARATLEGAL_MODEL_CACHE", str(BASE / "models")))
-                model_cache.mkdir(parents=True, exist_ok=True)
-                def translate_pair(text, source, target):
-                    model_id = f"Helsinki-NLP/opus-mt-{source}-{target}"
-                    cache_key = f"{source}-{target}"
-                    # Load each language pair once per running server process. This avoids
-                    # re-downloading/re-initialising multi-hundred-MB models on every scan.
-                    with _TRANSLATION_MODEL_LOCK:
-                        pair = _TRANSLATION_MODELS.get(cache_key)
-                        if pair is None:
-                            progress(f"Downloading/loading open-source {source.upper()} → {target.upper()} translation model. First run may take several minutes…")
-                            local_dir = model_cache / f"opus-mt-{source}-{target}"
-                            model_path = str(local_dir) if (local_dir / "config.json").exists() else model_id
-                            tokenizer = AutoTokenizer.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False)
-                            progress(f"Model files ready. Initialising {source.upper()} → {target.upper()} model…")
-                            torch.set_num_threads(min(2, os.cpu_count() or 1))
-                            model = AutoModelForSeq2SeqLM.from_pretrained(model_path, cache_dir=str(model_cache), local_files_only=False, low_cpu_mem_usage=True)
-                            model.eval()
-                            pair = (tokenizer, model)
-                            _TRANSLATION_MODELS[cache_key] = pair
-                    tokenizer, model = pair
-                    progress(f"Translating document with the {source.upper()} → {target.upper()} model…")
-                    outputs = []
-                    for offset in range(0, len(text), 700):
-                        chunk = text[offset:offset+700]
-                        batch = tokenizer(chunk, return_tensors="pt", truncation=True, max_length=384)
-                        with torch.inference_mode():
-                            generated = model.generate(**batch, num_beams=4, max_new_tokens=320, early_stopping=True)
-                        outputs.append(tokenizer.decode(generated[0], skip_special_tokens=True))
-                    return "\n\n".join(outputs)
-                if src == "en" or tgt == "en":
-                    translated = translate_pair(original, src, tgt)
-                else:
-                    intermediate = translate_pair(original, src, "en")
-                    translated = translate_pair(intermediate, "en", tgt)
-            except Exception as model_error:
-                print(f"OPUS-MT offline translation failed: {type(model_error).__name__}: {str(model_error)[:500]}", flush=True)
-                try:
-                    import argostranslate.translate as argos
-                    languages = argos.get_installed_languages()
-                    src_lang = next((x for x in languages if x.code == src), None)
-                    tgt_lang = next((x for x in languages if x.code == tgt), None)
-                    fallback = src_lang.get_translation(tgt_lang) if src_lang and tgt_lang else None
-                    if not fallback and src != "en" and tgt != "en":
-                        en_lang = next((x for x in languages if x.code == "en"), None)
-                        first = src_lang.get_translation(en_lang) if src_lang and en_lang else None
-                        second = en_lang.get_translation(tgt_lang) if en_lang and tgt_lang else None
-                        if first and second:
-                            translated = second.translate(first.translate(original))
-                        else:
-                            raise RuntimeError("No compatible Argos direct or English-pivot model")
-                    elif fallback:
-                        translated = fallback.translate(original)
-                    else:
-                        raise RuntimeError("No compatible Argos translation model")
-                except Exception as argos_error:
-                    detail = (
-                        "OCR succeeded, but offline translation failed. "
-                        f"Public OPUS-MT model error: {type(model_error).__name__}: {str(model_error)[:180]}. "
-                        f"Argos fallback: {type(argos_error).__name__}: {str(argos_error)[:120]}. "
-                        "Please retry; extracted text is not stored."
-                    )
-                    raise HTTPException(503, detail)
+        # Use the configured hosted AI provider for document translation.
+        # The previous in-process Transformers/OPUS-MT model downloads and loads
+        # hundreds of MB into the web container. Railway logs showed the container
+        # being KILLED while scan jobs were running, which erased the in-memory job
+        # registry and caused the client to report "Could not check translation status".
+        # Keep OCR local, but run translation through the configured API provider.
+        lang_names = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
+        detected_source = lang_names.get(src, source_language)
+        translated_parts = []
+        paragraphs = [p.strip() for p in original.splitlines() if p.strip()]
+        chunks = []
+        current = ""
+        for paragraph in paragraphs:
+            if len(current) + len(paragraph) + 1 > 2600 and current:
+                chunks.append(current)
+                current = paragraph
+            else:
+                current = (current + "\\n" + paragraph).strip()
+        if current:
+            chunks.append(current)
+        if not chunks:
+            chunks = [original]
+        for index, part in enumerate(chunks, 1):
+            progress(f"Translating section {index} of {len(chunks)} with the configured AI provider…")
+            prompt = (
+                f"Translate this document from {detected_source} into {target_language}. "
+                "Return only the translation. Do not explain, summarize, add commentary, "
+                "or transliterate full sentences. Preserve the meaning, headings, numbering, "
+                "bullet points, names, dates and paragraph structure. Use natural, complete "
+                "Indian Marathi/Hindi as requested.\n\nDOCUMENT:\n" + part
+            )
+            translated_part = ask_model(prompt, target_language)
+            if not translated_part or not translated_part.strip():
+                raise HTTPException(503, f"Translation provider returned an empty result for section {index}.")
+            translated_parts.append(translated_part.strip())
+        translated = "\\n\\n".join(translated_parts).strip()
         # Validate local model output. If the offline model produces corrupted text,
         # use the configured Gemini/OpenAI provider as a controlled fallback rather
         # than returning numeric/repeated garbage to the user.
