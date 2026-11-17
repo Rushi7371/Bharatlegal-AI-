@@ -786,7 +786,15 @@ Return ONLY valid JSON with exactly the same keys and structure. Translate all u
 
 @app.get("/", include_in_schema=False)
 def workspace_home():
-    return FileResponse(BASE / "static" / "workspace.html")
+    # Avoid mobile browsers/CDNs reusing the previous classic dashboard HTML.
+    return RedirectResponse(url="/workspace?rev=3117dc1", status_code=307)
+
+@app.get("/workspace", include_in_schema=False)
+def workspace_page():
+    return FileResponse(
+        BASE / "static" / "workspace.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
 
 @app.get("/classic", include_in_schema=False)
 def classic_workspace():
