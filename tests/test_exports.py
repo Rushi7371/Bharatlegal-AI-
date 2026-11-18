@@ -178,13 +178,30 @@ class DraftWorkflowTests(unittest.TestCase):
         self.assertIn("services.ecourts.gov.in/ecourtindia_v6", workspace)
         self.assertIn("bombayhighcourt.gov.in/bhc/jurisdiction", workspace)
         self.assertIn("mhBenchByDistrict", workspace)
-        self.assertIn("These are court levels / categories, not a live list", workspace)
+        self.assertIn("These are court levels / categories, not a live list of court complexes", workspace)
 
     def test_maharashtra_district_without_published_bench_mapping_is_not_guessed(self):
         from pathlib import Path
         workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
         self.assertIn("'Hingoli'", workspace)
-        self.assertIn("The official High Court jurisdiction page does not explicitly list this district", workspace)
+        self.assertIn("High Court bench jurisdiction for this district is not mapped here", workspace)
+
+
+    def test_all_india_state_and_district_selectors_use_lgd_codes(self):
+        from pathlib import Path
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        self.assertIn("https://india-lgd-index-api.vercel.app/v1", workspace)
+        self.assertIn("LGD_API+'/states'", workspace)
+        self.assertIn("LGD_API+'/districts?state='", workspace)
+        self.assertIn("dataset.lgdCode", workspace)
+        self.assertIn("https://lgdirectory.gov.in/", workspace)
+
+    def test_district_api_failure_does_not_invent_fallback_districts(self):
+        from pathlib import Path
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        self.assertIn("District list unavailable — verify on LGD", workspace)
+        self.assertIn("Do not rely on guessed district entries.", workspace)
+        self.assertIn("districtSelect.disabled=true", workspace)
 
     def test_draft_requires_facts(self):
         with self.assertRaises(HTTPException) as caught:
