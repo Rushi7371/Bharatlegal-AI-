@@ -896,7 +896,7 @@ def court_advanced_search(
     elif kind == "case_number":
         if not case_number.strip() or not year:
             raise HTTPException(422, "Case number and year are required.")
-        params["query"] = case_number.strip()[:80]
+        params["caseNumbers"] = case_number.strip()[:80]
         if case_type.strip(): params["caseTypes"] = case_type.strip()[:40]
     elif kind == "advocate":
         if advocate_name.strip():
