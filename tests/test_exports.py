@@ -23,6 +23,8 @@ from app.main import (
     draft_requirements,
     court_directory_status,
     court_directory_districts,
+    court_directory_complexes,
+    court_directory_courts,
     _ecourtsindia_partner_get,
 )
 
@@ -63,6 +65,14 @@ class CourtDirectoryProxyTests(unittest.TestCase):
     def test_directory_proxy_rejects_invalid_state_code(self):
         with self.assertRaises(HTTPException) as caught:
             court_directory_districts(state="../secrets")
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_complex_and_court_routes_require_parent_hierarchy_codes(self):
+        with self.assertRaises(HTTPException) as caught:
+            court_directory_complexes(state="MH", district_code="../bad")
+        self.assertEqual(caught.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as caught:
+            court_directory_courts(state="MH", district_code="1", complex_code="../bad")
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_directory_proxy_uses_server_side_bearer_token(self):
