@@ -21,6 +21,9 @@ from app.main import (
     DraftRequest,
     draft,
     draft_requirements,
+    court_directory_status,
+    court_directory_districts,
+    _ecourtsindia_partner_get,
 )
 
 
@@ -39,6 +42,44 @@ class HealthTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             scan_translation_status("missing-regression-test-job")
         self.assertEqual(caught.exception.status_code, 404)
+
+
+class CourtDirectoryProxyTests(unittest.TestCase):
+    def test_directory_status_discloses_provider_and_configuration(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {}, clear=True):
+            result = court_directory_status()
+        self.assertFalse(result["configured"])
+        self.assertFalse(result["provider_type"].startswith("Government"))
+
+    def test_directory_proxy_requires_partner_token(self):
+        from unittest.mock import patch
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(HTTPException) as caught:
+                _ecourtsindia_partner_get("/api/partner/causelist/court-structure/states")
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertIn("ECOURTSINDIA_PARTNER_API_KEY", caught.exception.detail)
+
+    def test_directory_proxy_rejects_invalid_state_code(self):
+        with self.assertRaises(HTTPException) as caught:
+            court_directory_districts(state="../secrets")
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_directory_proxy_uses_server_side_bearer_token(self):
+        import json
+        from unittest.mock import patch, MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps([
+            {"districtCode": "1", "districtName": "Pune"}
+        ]).encode("utf-8")
+        with patch.dict("os.environ", {"ECOURTSINDIA_PARTNER_API_KEY": "test-token"}), patch(
+            "app.main.urllib.request.urlopen", return_value=response
+        ) as open_url:
+            result = _ecourtsindia_partner_get("/api/partner/causelist/court-structure/states/MH/districts")
+        self.assertEqual(result["data"][0]["districtName"], "Pune")
+        self.assertFalse(result["official_government_api"])
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
 
 
 class TranslationLanguageDetectionTests(unittest.TestCase):
