@@ -995,12 +995,27 @@ def court_cause_list(
     offset: int = 0,
     limit: int = 50,
 ):
+    from datetime import date as date_type
+    if date:
+        try:
+            date_type.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(422, "Enter the cause-list date in YYYY-MM-DD format.")
+    normalized_list_type = list_type.strip().upper()
+    if normalized_list_type and normalized_list_type not in {"CIVIL", "CRIMINAL"}:
+        raise HTTPException(422, "Choose Civil or Criminal, or leave list type as All.")
+    if len(query) > 180 or len(judge) > 120 or len(advocate) > 120 or len(litigant) > 120:
+        raise HTTPException(422, "Cause-list search terms are too long.")
+    if offset < 0 or offset > 100000:
+        raise HTTPException(422, "Invalid cause-list offset.")
+    if limit < 1 or limit > 200:
+        raise HTTPException(422, "Cause-list page size must be between 1 and 200.")
     params = {"q": query.strip(), "date": date or None, "state": state or None,
               "districtCode": district_code or None, "courtComplexCode": complex_code or None,
               "court": court or None, "courtNo": court_no or None, "judge": judge or None,
               "advocate": advocate or None, "litigant": litigant or None,
-              "listType": list_type.upper() or None, "offset": max(0, min(offset, 100000)),
-              "limit": max(1, min(limit, 200)), "includeCourtroom": "true"}
+              "listType": normalized_list_type or None, "offset": offset,
+              "limit": limit, "includeCourtroom": "true"}
     if not any(params.get(k) for k in ("q", "date", "state", "districtCode", "courtComplexCode", "court", "courtNo", "judge", "advocate", "litigant")):
         raise HTTPException(422, "Choose a date, court or enter a search term.")
     return _ecourtsindia_data_get("/api/partner/causelist/search", params)
