@@ -183,6 +183,42 @@ def delete_cloud_matter(matter_id: str, request: Request):
     with _account_db() as conn:
         conn.execute("DELETE FROM matters WHERE user_id=? AND id=?", (user["id"], matter_id))
     return {"ok": True}
+@app.get("/api/saved-cases")
+def list_cloud_saved_cases(request: Request):
+    user = _current_user(request)
+    with _account_db() as conn:
+        rows = conn.execute("SELECT payload FROM matters WHERE user_id=? AND id LIKE 'case:%' ORDER BY updated_at DESC",
+                            (user["id"],)).fetchall()
+    return {"cases": [json.loads(row["payload"]) for row in rows]}
+
+@app.put("/api/saved-cases/{cnr}")
+def save_cloud_case(cnr: str, body: dict, request: Request):
+    user = _current_user(request)
+    cnr = cnr.upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Enter a valid 16-character CNR.")
+    if body.get("cnr", cnr).upper() != cnr:
+        raise HTTPException(422, "CNR does not match the request path.")
+    if len(json.dumps(body, ensure_ascii=False)) > 100_000:
+        raise HTTPException(413, "Saved case record is too large.")
+    now = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps({"cnr": cnr, **body}, ensure_ascii=False)
+    with _account_db() as conn:
+        conn.execute("""INSERT INTO matters(id,user_id,payload,created_at,updated_at) VALUES(?,?,?,?,?)
+          ON CONFLICT(user_id,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at""",
+          ("case:"+cnr, user["id"], payload, now, now))
+    return {"ok": True, "cnr": cnr}
+
+@app.delete("/api/saved-cases/{cnr}")
+def delete_cloud_saved_case(cnr: str, request: Request):
+    user = _current_user(request)
+    cnr = cnr.upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Enter a valid 16-character CNR.")
+    with _account_db() as conn:
+        conn.execute("DELETE FROM matters WHERE user_id=? AND id=?", (user["id"], "case:"+cnr))
+    return {"ok": True}
+
 
 
 
