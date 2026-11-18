@@ -862,7 +862,7 @@ def court_order_ai(cnr: str, filename: str):
     cnr = cnr.strip().upper()
     if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
         raise HTTPException(422, "Invalid CNR.")
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\\.pdf", filename):
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\.pdf", filename):
         raise HTTPException(422, "Invalid order filename.")
     return _ecourtsindia_data_get("/api/partner/case/" + cnr + "/order-ai/" + filename)
 
