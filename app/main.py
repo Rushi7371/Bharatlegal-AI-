@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
-import os, io, json, base64, tempfile, threading
+import os, io, json, base64, tempfile, threading, urllib.request, urllib.error
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
 
@@ -636,6 +636,73 @@ def health():
     "provider": "Gemini" if os.getenv("GEMINI_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else None),
     "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash") if os.getenv("GEMINI_API_KEY") else (os.getenv("OPENAI_MODEL", "gpt-4.1-mini") if os.getenv("OPENAI_API_KEY") else None)
 }
+
+def _ecourtsindia_partner_get(path: str):
+    """Server-side proxy for optional third-party court-structure data. Never expose partner tokens to browsers."""
+    token = os.getenv("ECOURTSINDIA_PARTNER_API_KEY", "").strip()
+    if not token:
+        raise HTTPException(503, "Court directory integration is not configured. Add ECOURTSINDIA_PARTNER_API_KEY after obtaining an authorized partner account.")
+    if not path.startswith("/api/partner/causelist/court-structure/"):
+        raise HTTPException(400, "Unsupported court-directory request.")
+    base = os.getenv("ECOURTSINDIA_API_BASE_URL", "https://webapi.ecourtsindia.com").rstrip("/")
+    request = urllib.request.Request(
+        base + path,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json", "User-Agent": "BharatLegal-AI/0.3"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        # Provider documentation currently returns arrays for court-structure routes.
+        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            payload = payload["data"]
+        if not isinstance(payload, list):
+            raise ValueError("Unexpected court directory response shape")
+        return {"data": payload, "source": "eCourtsIndia partner API (independent third-party provider)", "official_government_api": False}
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise HTTPException(502, "Court directory provider rejected the configured partner token. Check its validity and access permissions.")
+        if exc.code == 429:
+            raise HTTPException(503, "Court directory provider rate limit reached. Please retry later.")
+        raise HTTPException(502, "Court directory provider returned an upstream error.")
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        raise HTTPException(503, "Court directory provider is temporarily unavailable or returned invalid data.")
+
+
+@app.get("/api/courts/structure/status")
+def court_directory_status():
+    return {
+        "configured": bool(os.getenv("ECOURTSINDIA_PARTNER_API_KEY")),
+        "provider": "eCourtsIndia partner API",
+        "provider_type": "independent third-party service, not a Government of India API",
+        "official_verification_url": "https://services.ecourts.gov.in/ecourtindia_v6/"
+    }
+
+
+@app.get("/api/courts/structure/states")
+def court_directory_states():
+    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/states")
+
+
+@app.get("/api/courts/structure/districts")
+def court_directory_districts(state: str):
+    if not state or len(state) > 12 or not state.replace("-", "").isalnum():
+        raise HTTPException(400, "A valid provider state code is required.")
+    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/states/" + state + "/districts")
+
+
+@app.get("/api/courts/structure/complexes")
+def court_directory_complexes(district_code: str):
+    if not district_code or len(district_code) > 24 or not district_code.replace("-", "").isalnum():
+        raise HTTPException(400, "A valid provider district code is required.")
+    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/districts/" + district_code + "/complexes")
+
+
+@app.get("/api/courts/structure/courts")
+def court_directory_courts(complex_code: str):
+    if not complex_code or len(complex_code) > 24 or not complex_code.replace("-", "").isalnum():
+        raise HTTPException(400, "A valid provider court-complex code is required.")
+    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/complexes/" + complex_code + "/courts")
+
 
 @app.get("/api/draft/requirements")
 def draft_requirements(document_type: str, jurisdiction: str):
