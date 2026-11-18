@@ -853,6 +853,63 @@ def court_case_search(
     return _ecourtsindia_data_get("/api/partner/search", params)
 
 
+@app.get("/api/courts/advanced-search")
+def court_advanced_search(
+    search_type: str,
+    party_name: str = "",
+    case_type: str = "",
+    case_number: str = "",
+    year: int = 0,
+    advocate_name: str = "",
+    bar_code: str = "",
+    court_code: str = "",
+    state: str = "",
+    case_status: str = "BOTH",
+    page: int = 1,
+    page_size: int = 20,
+):
+    """eCourtsIndia partner Case Search v2 adapter for supported case searches."""
+    import re
+    kind = search_type.strip().lower()
+    if kind not in {"party", "case_number", "advocate", "fir"}:
+        raise HTTPException(422, "Unsupported search type.")
+    if case_status.upper() not in {"PENDING", "DISPOSED", "BOTH"}:
+        raise HTTPException(422, "Choose Pending, Disposed or Both.")
+    if year and not 1900 <= year <= 2100:
+        raise HTTPException(422, "Enter a valid four-digit year.")
+    if court_code and not re.fullmatch(r"[A-Za-z0-9_-]{2,32}", court_code):
+        raise HTTPException(422, "Invalid court code.")
+    params = {"page": max(1, min(page, 10000)), "pageSize": max(1, min(page_size, 50))}
+    if court_code: params["courtCodes"] = court_code
+    if state: params["stateCodes"] = state[:12]
+    if case_status.upper() != "BOTH": params["caseStatus"] = case_status.upper()
+    if kind == "party":
+        value = party_name.strip()
+        if len(value) < 3 or len(value) > 120:
+            raise HTTPException(422, "Enter a party name between 3 and 120 characters.")
+        params["litigants"] = value
+    elif kind == "case_number":
+        if not case_number.strip() or not year:
+            raise HTTPException(422, "Case number and year are required.")
+        params["query"] = case_number.strip()[:80]
+        params["filingYears"] = str(year)
+        if case_type.strip(): params["caseTypes"] = case_type.strip()[:40]
+    elif kind == "advocate":
+        if advocate_name.strip():
+            if len(advocate_name.strip()) < 3: raise HTTPException(422, "Enter at least three characters for advocate name.")
+            params["advocates"] = advocate_name.strip()[:120]
+        elif bar_code.strip():
+            # The documented partner search has advocate-name filtering, not a Bar Registration Number filter.
+            raise HTTPException(501, "Bar registration number search is not exposed in the documented partner API. Advocate-name search is available.")
+        else:
+            raise HTTPException(422, "Enter an advocate name.")
+    else:
+        # FIR search is available in the official eCourts user interface, but no FIR-number search
+        # filter is documented in the connected partner Case Search API. Never approximate it.
+        raise HTTPException(501, "FIR-number search is not currently exposed by the connected partner API. This search is not simulated.")
+    return _ecourtsindia_data_get("/api/partner/v2/search", params)
+
+
 @app.get("/api/courts/judgments/search")
 def court_judgment_search(
     query: str = "",
