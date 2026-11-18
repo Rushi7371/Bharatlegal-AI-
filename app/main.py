@@ -1062,6 +1062,21 @@ def court_order_ai(cnr: str, filename: str):
     return _ecourtsindia_data_get("/api/partner/case/" + cnr + "/order-ai/" + filename)
 
 
+@app.get("/api/courts/case/{cnr}/order-md/{filename}")
+def court_order_markdown(cnr: str, filename: str, signed: bool = True):
+    """Return provider-extracted order text and PDF metadata; do not expose the PDF base64 in UI."""
+    import re
+    cnr = cnr.strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Invalid CNR.")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\\.pdf", filename):
+        raise HTTPException(422, "Invalid order filename.")
+    return _ecourtsindia_data_get(
+        "/api/partner/case/" + cnr + "/order-md/" + filename,
+        {"signed": "true" if signed else "false"},
+    )
+
+
 @app.get("/api/draft/requirements")
 def draft_requirements(document_type: str, jurisdiction: str):
     """Return a drafting intake checklist, not a statement of prescribed court forms or local filing rules."""
