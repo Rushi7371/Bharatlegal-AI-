@@ -23,6 +23,7 @@ class DraftRequest(BaseModel):
     jurisdiction: str = "India"
     tone: str = "Formal"
     language: str = "English"
+    particulars: dict[str, str] = {}
 
 class ExamTranslateRequest(BaseModel):
     language: str
@@ -726,9 +727,41 @@ async def analyze(file: UploadFile = File(...), question: str = Form("Summarise 
 
 @app.post("/api/draft")
 def draft(body: DraftRequest):
-    if not body.facts.strip():
+    facts = (body.facts or "").strip()
+    jurisdiction = (body.jurisdiction or "").strip()
+    if not facts:
         raise HTTPException(400, "Provide the facts and drafting instructions.")
-    prompt = f"Draft type: {body.document_type}\nJurisdiction / State / Union Territory: {body.jurisdiction}\nTone: {body.tone}\nFacts and structured particulars: {body.facts}\n\nPrepare a jurisdiction-aware working draft with clear headings and bracketed placeholders for missing details. Use the selected State/UT, district, taluka/tehsil, police station and court/forum particulars where supplied. Distinguish central law from state-specific legislation, rules and local court practice. Do not assume that a state has a particular prescribed form, fee, limitation period, court hierarchy or filing requirement unless verified from a supplied authoritative source. If the applicable local rule or form is not verified, explicitly mark it for verification and identify the relevant official authority/source to consult. For criminal matters, ask for the date of alleged conduct and apply the appropriate IPC/BNS transition caveat. Do not invent facts, statutory citations, case law, court rules or filing requirements. Preserve supplied names, dates, amounts and addresses exactly; flag inconsistencies and missing mandatory particulars instead of guessing. Finish with (1) missing-information checklist, (2) jurisdiction and procedure verification checklist, and (3) advocate review warning. This is a working draft, not a filing-ready document."
+    if not jurisdiction:
+        raise HTTPException(400, "Select the State, Union Territory or India-wide jurisdiction.")
+    if len(facts) > 60000:
+        raise HTTPException(413, "Drafting instructions are too long. Please keep them under 60,000 characters.")
+    if body.language not in {"English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose English, Hindi or Marathi.")
+    allowed_particulars = {
+        "court", "place", "district", "taluka", "police_station", "court_level",
+        "local_language", "applicant", "respondent", "applicant_address",
+        "respondent_address", "event_date", "document_date", "filing_date",
+        "case_number", "advocate", "relief", "annexures", "other"
+    }
+    clean_particulars = {}
+    for key, value in (body.particulars or {}).items():
+        if key in allowed_particulars and isinstance(value, str) and value.strip():
+            if len(value) > 3000:
+                raise HTTPException(413, f"The {key.replace('_', ' ')} particular is too long.")
+            clean_particulars[key] = value.strip()
+    particulars_text = "\n".join(
+        f"{key.replace('_', ' ').title()}: {value}"
+        for key, value in clean_particulars.items()
+    ) or "No additional particulars supplied."
+    prompt = f"""Draft type: {body.document_type}
+Jurisdiction / State / Union Territory: {jurisdiction}
+Tone: {body.tone}
+Initial facts and drafting instructions: {facts}
+
+ADDITIONAL STRUCTURED PARTICULARS (preserve exactly; do not infer missing values):
+{particulars_text}
+
+Prepare a jurisdiction-aware working draft with clear headings and bracketed placeholders for missing details. Use the selected State/UT, district, taluka/tehsil, police station and court/forum particulars where supplied. Distinguish central law from state-specific legislation, rules and local court practice. Do not assume that a state has a particular prescribed form, fee, limitation period, court hierarchy or filing requirement unless verified from a supplied authoritative source. If the applicable local rule or form is not verified, explicitly mark it for verification and identify the relevant official authority/source to consult. For criminal matters, ask for the date of alleged conduct and apply the appropriate IPC/BNS transition caveat. Do not invent facts, statutory citations, case law, court rules or filing requirements. Preserve supplied names, dates, amounts and addresses exactly; flag inconsistencies and missing mandatory particulars instead of guessing. Do not silently resolve contradictions between initial facts and additional particulars; flag them for confirmation. Finish with (1) missing-information checklist, (2) jurisdiction and procedure verification checklist, and (3) advocate review warning. This is a working draft, not a filing-ready document."""
     return {"draft": ask_model(prompt, body.language)}
 
 @app.post("/api/exams/lesson")
