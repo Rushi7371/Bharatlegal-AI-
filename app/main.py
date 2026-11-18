@@ -754,7 +754,7 @@ def court_directory_courts(state: str, district_code: str, complex_code: str):
 
 
 # Native eCourts workspace APIs. All provider calls stay server-side; credentials never reach the browser.
-def _ecourtsindia_data_get(path: str, query: dict | None = None):
+def _ecourtsindia_data_get(path: str, query: dict | None = None, method: str = "GET"):
     token = os.getenv("ECOURTSINDIA_PARTNER_API_KEY", "").strip()
     if not token:
         raise HTTPException(503, "Live court data is not configured. Set the partner API key in Railway Variables.")
@@ -782,7 +782,9 @@ def _ecourtsindia_data_get(path: str, query: dict | None = None):
                 pairs.append((key, str(value)))
         if pairs:
             url += "?" + urlencode(pairs)
-    request = urllib.request.Request(url, headers={
+    if method not in {"GET", "POST"}:
+        raise HTTPException(400, "Unsupported court-data method.")
+    request = urllib.request.Request(url, data=b"" if method == "POST" else None, method=method, headers={
         "Authorization": "Bearer " + token,
         "Accept": "application/json",
         "User-Agent": "BharatLegal-AI/0.4"
@@ -828,6 +830,16 @@ def court_case_detail(cnr: str):
     if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
         raise HTTPException(422, "Enter a valid 16-character CNR (4 letters followed by 12 digits).")
     return _ecourtsindia_data_get("/api/partner/case/" + cnr)
+
+
+@app.post("/api/courts/case/{cnr}/refresh")
+def court_case_refresh(cnr: str):
+    """Queue an explicitly requested provider refresh; this may consume partner API credits."""
+    import re
+    cnr = cnr.strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Enter a valid 16-character CNR.")
+    return _ecourtsindia_data_get("/api/partner/case/" + cnr + "/refresh", method="POST")
 
 
 @app.get("/api/courts/search")
