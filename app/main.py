@@ -761,6 +761,8 @@ def _ecourtsindia_data_get(path: str, query: dict | None = None):
     allowed = (
         "/api/partner/case/",
         "/api/partner/search",
+        "/api/partner/v2/search",
+        "/api/partner/v2/facets/search",
         "/api/partner/causelist/",
         "/api/partner/enums",
     )
@@ -864,6 +866,7 @@ def court_advanced_search(
     bar_code: str = "",
     court_code: str = "",
     state: str = "",
+    district_code: str = "",
     case_status: str = "BOTH",
     page: int = 1,
     page_size: int = 20,
@@ -882,8 +885,9 @@ def court_advanced_search(
     params = {"page": max(1, min(page, 10000)), "pageSize": max(1, min(page_size, 50))}
     if court_code: params["courtCodes"] = court_code
     if state: params["stateCodes"] = state[:12]
+    if district_code: params["districtCodes"] = district_code[:24]
     if year: params["filingYears"] = str(year)
-    if case_status.upper() != "BOTH": params["caseStatus"] = case_status.upper()
+    if case_status.upper() != "BOTH": params["caseStatuses"] = case_status.upper()
     if kind == "party":
         value = party_name.strip()
         if len(value) < 3 or len(value) > 120:
@@ -907,7 +911,7 @@ def court_advanced_search(
         # FIR search is available in the official eCourts user interface, but no FIR-number search
         # filter is documented in the connected partner Case Search API. Never approximate it.
         raise HTTPException(501, "FIR-number search is not currently exposed by the connected partner API. This search is not simulated.")
-    return _ecourtsindia_data_get("/api/partner/search", params)
+    return _ecourtsindia_data_get("/api/partner/v2/search", params)
 
 
 @app.get("/api/courts/judgments/search")
