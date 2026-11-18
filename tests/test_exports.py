@@ -229,7 +229,9 @@ class DraftWorkflowTests(unittest.TestCase):
         self.assertIn("services.ecourts.gov.in/ecourtindia_v6", workspace)
         self.assertIn("bombayhighcourt.gov.in/bhc/jurisdiction", workspace)
         self.assertIn("mhBenchByDistrict", workspace)
-        self.assertIn("These are court levels / categories, not a live list of court complexes", workspace)
+        self.assertIn("Live court complexes loaded from eCourtsIndia partner data", workspace)
+        self.assertIn("Live court directory is not connected (partner token not configured)", workspace)
+        self.assertIn("Cross-check with official eCourts before filing", workspace)
 
     def test_maharashtra_district_without_published_bench_mapping_is_not_guessed(self):
         from pathlib import Path
@@ -245,6 +247,16 @@ class DraftWorkflowTests(unittest.TestCase):
         self.assertIn("LGD_API+'/districts?state='", workspace)
         self.assertIn("dataset.lgdCode", workspace)
         self.assertIn("https://lgdirectory.gov.in/", workspace)
+
+    def test_live_court_selector_uses_hierarchy_and_saves_codes(self):
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        self.assertIn("/api/courts/structure/status", workspace)
+        self.assertIn("/api/courts/structure/complexes?state=", workspace)
+        self.assertIn("/api/courts/structure/courts?state=", workspace)
+        self.assertIn("providerMatch", workspace)
+        self.assertIn("courtComplexCode:selectedComplex", workspace)
+        self.assertIn("courtRoomCode:selectedCourt", workspace)
+        self.assertIn("independent third-party provider", workspace)
 
     def test_district_api_failure_does_not_invent_fallback_districts(self):
         from pathlib import Path
