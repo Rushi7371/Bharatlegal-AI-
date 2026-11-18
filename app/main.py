@@ -371,12 +371,14 @@ def _detect_source_language(text: str) -> str:
 
 
 def _process_scan_translation(data: bytes, filename: str, mime: str, source_language: str, target_language: str, progress_callback=None):
-    """Run local OCR and offline translation in a worker thread."""
+    """Run server-side OCR/text extraction and configured-provider translation in a worker thread."""
     def progress(message):
         if progress_callback:
             progress_callback(message)
     if target_language not in {"English", "Hindi", "Marathi"}:
         raise HTTPException(400, "Choose English, Hindi or Marathi.")
+    if source_language not in {"Auto-detect", "English", "Hindi", "Marathi"}:
+        raise HTTPException(400, "Choose Auto-detect, English, Hindi or Marathi as the source language.")
     if not data or len(data) > 15 * 1024 * 1024:
         raise HTTPException(413, "Choose a file up to 15 MB.")
     name = (filename or "document").lower()
@@ -560,9 +562,8 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                 raise HTTPException(503, f"Translation provider returned an empty result for section {index}.")
             translated_parts.append(translated_part.strip())
         translated = "\n\n".join(translated_parts).strip()
-        # Validate local model output. If the offline model produces corrupted text,
-        # use the configured Gemini/OpenAI provider as a controlled fallback rather
-        # than returning numeric/repeated garbage to the user.
+        # Validate provider output. If the first pass looks corrupted, retry with
+        # smaller chunks rather than returning numeric/repeated garbage to the user.
         import re
         def translation_quality(value):
             words = re.findall(r"[A-Za-z\u0900-\u097F]{2,}", value)
@@ -609,7 +610,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             except Exception as fallback_error:
                 raise HTTPException(
                     503,
-                    "The offline translation model produced corrupted output and the configured AI fallback could not produce a reliable translation. "
+                    "The translation provider produced corrupted output and a smaller-chunk retry could not produce a reliable translation. "
                     f"Details: {type(fallback_error).__name__}: {str(fallback_error)[:180]}. "
                     "Please retry later; the original OCR text remains available only in this scan session."
                 )
