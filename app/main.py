@@ -363,7 +363,7 @@ def _detect_source_language(text: str) -> str:
         "grammar, not by script (both commonly use Devanagari). If mixed, choose the "
         "dominant language. Return only the single label.\n\nTEXT:\n" + sample
     )
-    detected = ask_model(prompt, "English").strip().strip(" .\\"'").lower()
+    detected = ask_model(prompt, "English").strip().strip(" .").strip("\"'").lower()
     mapping = {"english": "English", "hindi": "Hindi", "marathi": "Marathi"}
     if detected not in mapping:
         raise HTTPException(503, "Could not reliably identify whether the Devanagari document is Hindi or Marathi. Select the source language manually and retry.")
