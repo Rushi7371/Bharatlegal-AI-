@@ -591,7 +591,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                 for offset in range(0, len(original), 3000):
                     part = original[offset:offset + 3000]
                     prompt = (
-                        f"Translate the following document text from {source_language} into {target_language}. "
+                        f"Translate the following document text from {detected_source} into {target_language}. "
                         "Return only the translation, with no preface, explanation, markdown fences or commentary. "
                         "Preserve all headings, numbering, bullet points, names, dates and meaning. "
                         "Use natural, complete Indian Marathi/Hindi as requested; do not transliterate English "
