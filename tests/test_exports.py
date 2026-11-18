@@ -249,7 +249,7 @@ class DraftWorkflowTests(unittest.TestCase):
         self.assertIn("https://lgdirectory.gov.in/", workspace)
 
     def test_live_court_selector_uses_hierarchy_and_saves_codes(self):
-        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        workspace = open("static/workspace.html", encoding="utf-8").read()
         self.assertIn("/api/courts/structure/status", workspace)
         self.assertIn("/api/courts/structure/complexes?state=", workspace)
         self.assertIn("/api/courts/structure/courts?state=", workspace)
