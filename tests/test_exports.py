@@ -31,6 +31,8 @@ from app.main import (
     court_cause_list,
     court_available_dates,
     court_order_ai,
+    _court_rate_limit_check,
+    _COURT_RATE_LIMIT_EVENTS,
 )
 
 
@@ -39,6 +41,29 @@ async def response_bytes(response):
     async for chunk in response.body_iterator:
         chunks.append(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
     return b"".join(chunks)
+
+
+class CourtDataRateLimitTests(unittest.TestCase):
+    def setUp(self):
+        _COURT_RATE_LIMIT_EVENTS.clear()
+
+    def test_court_data_routes_allow_requests_under_limit(self):
+        for second in range(30):
+            allowed, retry = _court_rate_limit_check("198.51.100.10", now=1000 + second)
+            self.assertTrue(allowed)
+            self.assertEqual(retry, 0)
+
+    def test_court_data_routes_reject_31st_request_in_a_minute(self):
+        for second in range(30):
+            self.assertTrue(_court_rate_limit_check("198.51.100.11", now=2000 + second)[0])
+        allowed, retry = _court_rate_limit_check("198.51.100.11", now=2029)
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(retry, 1)
+
+    def test_rate_limits_are_isolated_per_client(self):
+        for second in range(30):
+            _court_rate_limit_check("198.51.100.12", now=3000 + second)
+        self.assertTrue(_court_rate_limit_check("198.51.100.13", now=3029)[0])
 
 
 class HealthTests(unittest.TestCase):
