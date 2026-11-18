@@ -534,6 +534,11 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
             detected_source = source_language
         else:
             detected_source = _detect_source_language(original)
+        if detected_source == target_language:
+            raise HTTPException(
+                400,
+                f"The document is already in {detected_source}. Choose a different target language."
+            )
         translated_parts = []
         paragraphs = [p.strip() for p in original.splitlines() if p.strip()]
         chunks = []
@@ -585,7 +590,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
                          "unique_ratio": round(unique_ratio, 3), "devanagari_ratio": round(script_ratio, 3)}
         bad_output, quality = translation_quality(translated)
         if bad_output:
-            print(f"Local translation failed quality checks: {quality}; attempting configured AI fallback.", flush=True)
+            print(f"Provider translation failed quality checks: {quality}; attempting smaller-chunk provider retry.", flush=True)
             try:
                 translated_parts = []
                 for offset in range(0, len(original), 3000):
@@ -619,7 +624,7 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, "Local document processing failed. " + str(exc)[:180])
+        raise HTTPException(502, "Document processing failed. " + str(exc)[:180])
 
 @app.get("/api/health")
 def health():
