@@ -691,17 +691,22 @@ def court_directory_districts(state: str):
 
 
 @app.get("/api/courts/structure/complexes")
-def court_directory_complexes(district_code: str):
+def court_directory_complexes(state: str, district_code: str):
+    if not state or len(state) > 12 or not state.replace("-", "").isalnum():
+        raise HTTPException(400, "A valid provider state code is required.")
     if not district_code or len(district_code) > 24 or not district_code.replace("-", "").isalnum():
         raise HTTPException(400, "A valid provider district code is required.")
-    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/districts/" + district_code + "/complexes")
+    path = "/api/partner/causelist/court-structure/states/" + state + "/districts/" + district_code + "/complexes"
+    return _ecourtsindia_partner_get(path)
 
 
 @app.get("/api/courts/structure/courts")
-def court_directory_courts(complex_code: str):
-    if not complex_code or len(complex_code) > 24 or not complex_code.replace("-", "").isalnum():
-        raise HTTPException(400, "A valid provider court-complex code is required.")
-    return _ecourtsindia_partner_get("/api/partner/causelist/court-structure/complexes/" + complex_code + "/courts")
+def court_directory_courts(state: str, district_code: str, complex_code: str):
+    for value, label, limit in ((state, "state", 12), (district_code, "district", 24), (complex_code, "court-complex", 24)):
+        if not value or len(value) > limit or not value.replace("-", "").isalnum():
+            raise HTTPException(400, "A valid provider " + label + " code is required.")
+    path = "/api/partner/causelist/court-structure/states/" + state + "/districts/" + district_code + "/complexes/" + complex_code + "/courts"
+    return _ecourtsindia_partner_get(path)
 
 
 @app.get("/api/draft/requirements")
