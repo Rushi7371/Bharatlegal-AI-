@@ -47,23 +47,38 @@ async function retrieveCaseProvisions(cnr,btn){
  try{
   const d=await api(API+'/case/'+encodeURIComponent(cnr)+'/provisions'),data=d.data||d;
   const rows=Array.isArray(data.provisions)?data.provisions:(Array.isArray(data)?data:[]);
-  if(!rows.length)throw new Error('The provider returned no detailed provisions for this case. This does not establish that the case has no statutory provisions.');
   const box=document.createElement('article');box.className='result';
   const h=document.createElement('b');h.textContent='Detailed statutory provisions ('+rows.length+')';box.append(h);
+  if(!rows.length){
+   const empty=document.createElement('p');empty.className='small';
+   empty.textContent='No parsed statutory citations were returned for this case. The provider may not have parsed citations for this record; this does not mean the case has no statutory references. Check the original orders and pleadings.';
+   box.append(empty);
+  }
   rows.forEach(p=>{
    if(!p||typeof p!=='object')return;
-   const section=p.section||p.provision||p;
+   const enriched=p.section&&typeof p.section==='object'?p.section:null;
+   const act=enriched?.act||{};
+   const section=enriched?.section||{};
    const row=document.createElement('div');row.className='order';
    const info=document.createElement('div');
-   const title=document.createElement('b');title.textContent=[p.act||p.actName||p.title||section.act||'Statute',p.unit||section.unit,p.number||section.number||p.sectionNumber].filter(Boolean).join(' · ');info.append(title);
-   const body=document.createElement('pre');body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 inherit;margin-top:8px';body.textContent=section.text||p.text||section.provisionText||'No provision text returned.';info.append(body);
-   const offence=p.offence||section.offence;
-   if(offence){const ul=document.createElement('ul');ul.className='list';[['Cognizable',offence.cognizable],['Bailable',offence.bailable],['Punishment',offence.punishment],['Triable by',offence.triable_by]].forEach(([k,v])=>{if(v!==undefined&&v!==null){const li=document.createElement('li');li.textContent=k+': '+String(v);ul.append(li)}});info.append(ul)}
-   const equivalents=p.equivalents||section.equivalents||[];
-   if(Array.isArray(equivalents)&&equivalents.length){const ul=document.createElement('ul');ul.className='list';equivalents.forEach(e=>{const li=document.createElement('li');li.textContent=[e.title,e.unit,e.number,e.relation,e.direction].filter(Boolean).join(' · ');ul.append(li)});info.append(ul)}
+   const actName=act.title||p.act_as_written||p.act||'Statute';
+   const unit=p.unit||section.unit||'';
+   const number=p.number||section.number||'';
+   const title=document.createElement('b');title.textContent=[actName,unit,number].filter(Boolean).join(' · ');info.append(title);
+   if(!enriched){
+    const unresolved=document.createElement('p');unresolved.className='small';unresolved.textContent='The citation was found in the case record, but the statutory corpus did not resolve its full section text.';info.append(unresolved);
+   }else{
+    const body=document.createElement('pre');body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 inherit;margin-top:8px';body.textContent=section.text||section.content||'No provision text returned.';info.append(body);
+    const offence=section.offence||enriched.offence;
+    if(offence){const ul=document.createElement('ul');ul.className='list';[['Cognizable',offence.cognizable],['Bailable',offence.bailable],['Punishment',offence.punishment],['Triable by',offence.triable_by]].forEach(([k,v])=>{if(v!==undefined&&v!==null){const li=document.createElement('li');li.textContent=k+': '+String(v);ul.append(li)}});info.append(ul)}
+    const equivalents=section.equivalents||enriched.equivalents||[];
+    if(Array.isArray(equivalents)&&equivalents.length){const ul=document.createElement('ul');ul.className='list';equivalents.forEach(e=>{const li=document.createElement('li');li.textContent=[e.title||e.act,e.unit,e.number,e.relation,e.direction].filter(Boolean).join(' · ');ul.append(li)});info.append(ul)}
+    const url=section.url||act.url;
+    if(url){try{const u=new URL(url);if(u.protocol==='https:'&&u.hostname==='indiacode.ecourtsindia.com'){const a=document.createElement('a');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Open provision in provider reader';info.append(a)}}catch(_){}}
+   }
    row.append(info);box.append(row);
   });
-  const note=document.createElement('p');note.className='small';note.textContent='Provider-supplied statutory text, offence classifications and cross-references are research aids. Verify the applicable law, amendments, commencement and Gazette text before relying on them.';box.append(note);
+  const note=document.createElement('p');note.className='small';note.textContent='Provider-supplied statutory text, offence classifications and cross-references are research aids. Verify applicable law, amendments, commencement and Gazette text before relying on them.';box.append(note);
   $('caseResult').append(box);box.scrollIntoView({behavior:'smooth',block:'start'});
  }catch(e){msg('caseMsg',e.message,true)}finally{loading(btn,false,'Retrieve provision details')}
 }
