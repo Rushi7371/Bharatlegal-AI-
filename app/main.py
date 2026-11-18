@@ -94,9 +94,26 @@ class MatterPayload(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     data: dict
 
+# Basic database-backed throttling for account endpoints, shared across app workers.
+def _account_rate_limit(key: str, limit: int = 10, window_seconds: int = 900):
+    now = int(time.time())
+    with _account_db() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS auth_attempts (key TEXT NOT NULL, attempted_at INTEGER NOT NULL)")
+        conn.execute("DELETE FROM auth_attempts WHERE attempted_at < ?", (now - window_seconds,))
+        count = conn.execute("SELECT COUNT(*) FROM auth_attempts WHERE key=? AND attempted_at>?",
+                             (key, now - window_seconds)).fetchone()[0]
+        if count >= limit:
+            raise HTTPException(429, "Too many account attempts. Please wait 15 minutes and try again.")
+        conn.execute("INSERT INTO auth_attempts(key,attempted_at) VALUES(?,?)", (key, now))
+
+def _account_attempt_key(request: Request, email: str) -> str:
+    ip = request.client.host if request.client else "unknown"
+    return hashlib.sha256((ip + "|" + email.strip().lower()).encode()).hexdigest()
+
 @app.post("/api/account/register")
-def account_register(body: AccountCredentials, response: Response):
+def account_register(body: AccountCredentials, request: Request, response: Response):
     email = body.email.strip().lower()
+    _account_rate_limit(_account_attempt_key(request, email), limit=5)
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise HTTPException(422, "Enter a valid email address.")
     if len(body.password) < 12 or not re.search(r"[A-Za-z]", body.password) or not re.search(r"\d", body.password):
@@ -114,8 +131,9 @@ def account_register(body: AccountCredentials, response: Response):
     return {"user": {"id": user_id, "email": email}, "message": "Account created. Add an email-verification workflow before enabling public production sign-ups."}
 
 @app.post("/api/account/login")
-def account_login(body: AccountCredentials, response: Response):
+def account_login(body: AccountCredentials, request: Request, response: Response):
     email = body.email.strip().lower()
+    _account_rate_limit(_account_attempt_key(request, email), limit=10)
     with _account_db() as conn:
         row = conn.execute("SELECT id,email,password_hash,password_salt FROM users WHERE email=?", (email,)).fetchone()
     if not row or not hmac.compare_digest(_password_digest(body.password, bytes.fromhex(row["password_salt"])), row["password_hash"]):
