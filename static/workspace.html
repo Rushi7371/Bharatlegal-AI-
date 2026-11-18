@@ -36,7 +36,7 @@ const mhBenchByDistrict={'ahmednagar':'Aurangabad Bench','ahilyanagar':'Aurangab
 const mhSpecialistCourts=['City Civil Court — Mumbai (verify subject-matter jurisdiction)','Court of Small Causes — Mumbai (verify subject-matter jurisdiction)','Chief Metropolitan Magistrate Court — Mumbai','Family Court — select city / district; verify establishment','Commercial Court — select district; verify establishment','Motor Accident Claims Tribunal — select district; verify establishment','Consumer Disputes Redressal Commission — select level / district','Co-operative Court / Tribunal — verify territorial jurisdiction','Industrial / Labour Court — verify territorial jurisdiction','Other statutory tribunal / authority — specify from official records'];
 function addCourtGroup(label,items){const og=document.createElement('optgroup');og.label=label;items.forEach(item=>{const o=document.createElement('option');o.value=item;o.textContent=item;og.appendChild(o)});courtSelect.appendChild(og)}
 function titleCase(v){return String(v||'').toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase())}
-function districtAlias(v){return String(v||'').toLowerCase().replace(/\\s*\\([^)]*\\)/g,'').trim()}
+function districtAlias(v){return String(v||'').toLowerCase().replace(/\s*\([^)]*\)/g,'').trim()}
 function getMhBench(district){const n=districtAlias(district);return mhBenchByDistrict[n]||null}
 function cachedJson(key){try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch(_){return null}}
 function saveJson(key,value){try{sessionStorage.setItem(key,JSON.stringify(value))}catch(_){}}
