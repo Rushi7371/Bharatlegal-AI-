@@ -416,3 +416,25 @@ class TranslationPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevanagariPdfExportTests(unittest.TestCase):
+    def test_devanagari_font_is_packaged_for_pdf_exports(self):
+        from pathlib import Path
+        candidates = [
+            Path("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf"),
+        ]
+        self.assertTrue(any(path.is_file() for path in candidates), "Install fonts-noto-core in the runtime image")
+
+    def test_marathi_scan_text_exports_to_pdf(self):
+        response = export_scan_pdf(ScanExportRequest(text="मराठी भाषेतील कायदेशीर दस्तऐवज. अर्जदार आणि प्रतिवादी."))
+        payload = asyncio.run(response_bytes(response))
+        self.assertTrue(payload.startswith(b"%PDF-"))
+        self.assertGreater(len(payload), 500)
+
+    def test_marathi_legal_draft_exports_to_pdf(self):
+        response = export_draft_pdf(DraftExportRequest(text="मराठी कायदेशीर मसुदा. न्यायालयात अर्ज सादर करणे."))
+        payload = asyncio.run(response_bytes(response))
+        self.assertTrue(payload.startswith(b"%PDF-"))
+        self.assertGreater(len(payload), 500)
