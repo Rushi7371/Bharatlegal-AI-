@@ -17,6 +17,7 @@ from app.main import (
     health,
     scan_translation_status,
     _detect_source_language,
+    _process_scan_translation,
 )
 
 
@@ -97,6 +98,57 @@ class ExportTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as caught:
                     handler(request)
                 self.assertEqual(caught.exception.status_code, 422)
+
+
+class TranslationPipelineTests(unittest.TestCase):
+    def test_auto_detected_marathi_is_used_in_translation_prompt(self):
+        from unittest.mock import patch
+        source = "माझ्या मते हा कायदा महाराष्ट्रातील नागरिकांसाठी आहे आणि आम्ही न्यायालयात अर्ज केला आहे. हा अर्ज आज सादर केला आहे."
+        output = "हा कायदा नागरिकांसाठी महत्त्वाचा आहे. आम्ही न्यायालयात अर्ज सादर केला आहे आणि त्याची योग्य तपासणी करणे आवश्यक आहे."
+        with patch("app.main.ask_model", return_value=output) as model:
+            result = _process_scan_translation(
+                source.encode("utf-8"), "sample.txt", "text/plain",
+                "Auto-detect", "Marathi"
+            )
+        self.assertEqual(result["source_language"], "Marathi")
+        self.assertEqual(result["translated_text"], output)
+        self.assertIn("from Marathi into Marathi", model.call_args.args[0])
+
+    def test_explicit_source_language_skips_auto_classification(self):
+        from unittest.mock import patch
+        source = "This is a sufficiently long English legal document with facts and dates for translation."
+        output = "हा एक पुरेसा मोठा कायदेशीर दस्तऐवज आहे ज्यामध्ये तथ्ये आणि तारखा दिलेल्या आहेत."
+        with patch("app.main.ask_model", return_value=output) as model, patch(
+            "app.main._detect_source_language", side_effect=AssertionError("must not auto-detect")
+        ):
+            result = _process_scan_translation(
+                source.encode("utf-8"), "sample.txt", "text/plain",
+                "English", "Marathi"
+            )
+        self.assertEqual(result["source_language"], "English")
+        self.assertIn("from English into Marathi", model.call_args.args[0])
+
+    def test_provider_unavailable_is_returned_as_clear_503(self):
+        from unittest.mock import patch
+        source = "This is a sufficiently long English legal document with facts and dates for translation."
+        with patch("app.main.ask_model", side_effect=HTTPException(503, "provider unavailable")):
+            with self.assertRaises(HTTPException) as caught:
+                _process_scan_translation(
+                    source.encode("utf-8"), "sample.txt", "text/plain",
+                    "English", "Marathi"
+                )
+        self.assertEqual(caught.exception.status_code, 503)
+
+    def test_empty_or_too_short_extracted_text_is_rejected(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model") as model:
+            with self.assertRaises(HTTPException) as caught:
+                _process_scan_translation(
+                    b"tiny", "sample.txt", "text/plain",
+                    "English", "Marathi"
+                )
+        self.assertEqual(caught.exception.status_code, 422)
+        model.assert_not_called()
 
 
 if __name__ == "__main__":
