@@ -183,9 +183,8 @@ class DraftWorkflowTests(unittest.TestCase):
     def test_maharashtra_district_without_published_bench_mapping_is_not_guessed(self):
         from pathlib import Path
         workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
-        self.assertIn("'Hingoli'", workspace)
+        self.assertIn("getMhBench(district)", workspace)
         self.assertIn("High Court bench jurisdiction for this district is not mapped here", workspace)
-
 
     def test_all_india_state_and_district_selectors_use_lgd_codes(self):
         from pathlib import Path
