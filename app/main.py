@@ -749,6 +749,20 @@ def draft(body: DraftRequest):
             if len(value) > 3000:
                 raise HTTPException(413, f"The {key.replace('_', ' ')} particular is too long.")
             clean_particulars[key] = value.strip()
+    document_type_guidance = {
+        "Legal notice": "DOCUMENT STRUCTURE: identify sender and recipient; state the engagement/transaction and concise chronology; describe the alleged breach or grievance without overstating disputed facts; set out the requested cure or response; specify a response period only if supplied or independently verified; reserve rights without making unsupported threats; list enclosures and service details.",
+        "Reply to legal notice": "DOCUMENT STRUCTURE: identify the notice and its date; respond paragraph-by-paragraph where the notice text is available; clearly distinguish admissions, denials, lack of knowledge and requests for proof; state the recipient's factual position and supporting documents; avoid accidental admissions; reserve rights. Do not invent the notice's contents.",
+        "Affidavit": "DOCUMENT STRUCTURE: title and forum placeholders; deponent identity and capacity; numbered factual paragraphs; clearly separate personal knowledge from information/belief and identify the source for the latter; verification/solemn affirmation block with place/date placeholders. Mark oath, attestation, exhibit and notarisation requirements for local verification; do not claim an affidavit is validly sworn.",
+        "Application / representation": "DOCUMENT STRUCTURE: addressee/authority; applicant identity and reference number; concise background and chronology; specific grounds or grievance; numbered requests/prayer; list enclosures; date/place/signature and acknowledgement placeholders. Do not imply the authority has jurisdiction unless established.",
+        "Commercial agreement": "DOCUMENT STRUCTURE: parties and authority; definitions; scope/deliverables; responsibilities and timelines; consideration, invoicing and taxes; representations; confidentiality/data handling; IP ownership/licence; term, termination and consequences; liability/indemnity; force majeure; notices; governing law, jurisdiction and dispute resolution; signatures and schedules. Flag negotiated blanks and clauses needing specialist review; do not assume enforceability.",
+        "Memorandum of understanding": "DOCUMENT STRUCTURE: parties and purpose; background; objectives and contributions; governance/contact persons; milestones and dependencies; costs/resources; confidentiality and IP; duration, amendment and exit; dispute handling; signatures. Explicitly identify which clauses are intended to bind and which are non-binding; do not decide that status without the parties' instructions.",
+        "Petition / pleading outline": "DOCUMENT STRUCTURE: forum and jurisdiction placeholders; parties and descriptions; material facts in numbered chronological paragraphs; cause of action/legal grounds; limitation chronology; jurisdiction facts; interim relief if requested; final prayer; list of documents/annexures; verification/affidavit placeholders. Do not assert maintainability, limitation or a prescribed format as settled without verified facts and current rules.",
+        "Written submissions outline": "DOCUMENT STRUCTURE: court/tribunal and case number; appearances/party represented; brief procedural and factual background; issues for determination; submissions issue-by-issue tied to pleadings and record references; authorities only when supplied or verified; relief/prayer. Mark every missing record page, case citation or proposition for counsel verification."
+    }
+    drafting_guidance = document_type_guidance.get(
+        body.document_type,
+        "DOCUMENT STRUCTURE: use a clear title, parties, purpose, material facts, requested outcome, supporting-document list, signature/date placeholders and a missing-information checklist. Tailor the structure to the requested document without inventing prescribed forms."
+    )
     particulars_text = "\n".join(
         f"{key.replace('_', ' ').title()}: {value}"
         for key, value in clean_particulars.items()
@@ -760,6 +774,8 @@ Initial facts and drafting instructions: {facts}
 
 ADDITIONAL STRUCTURED PARTICULARS (preserve exactly; do not infer missing values):
 {particulars_text}
+
+{drafting_guidance}
 
 Prepare a jurisdiction-aware working draft with clear headings and bracketed placeholders for missing details. Use the selected State/UT, district, taluka/tehsil, police station and court/forum particulars where supplied. Distinguish central law from state-specific legislation, rules and local court practice. Do not assume that a state has a particular prescribed form, fee, limitation period, court hierarchy or filing requirement unless verified from a supplied authoritative source. If the applicable local rule or form is not verified, explicitly mark it for verification and identify the relevant official authority/source to consult. For criminal matters, ask for the date of alleged conduct and apply the appropriate IPC/BNS transition caveat. Do not invent facts, statutory citations, case law, court rules or filing requirements. Preserve supplied names, dates, amounts and addresses exactly; flag inconsistencies and missing mandatory particulars instead of guessing. Do not silently resolve contradictions between initial facts and additional particulars; flag them for confirmation. Finish with (1) missing-information checklist, (2) jurisdiction and procedure verification checklist, and (3) advocate review warning. This is a working draft, not a filing-ready document."""
     return {"draft": ask_model(prompt, body.language)}
