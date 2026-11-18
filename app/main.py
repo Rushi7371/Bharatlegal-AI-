@@ -884,7 +884,14 @@ def court_judgment_search(
     data = payload.get("data", payload) if isinstance(payload, dict) else {}
     results = data.get("results", []) if isinstance(data, dict) else []
     # Defensively keep only records explicitly marked as containing judgments.
-    filtered = [row for row in results if row.get("hasJudgments") is True or int(row.get("judgmentCount") or 0) > 0]
+    filtered = []
+    for row in results:
+        try:
+            judgment_count = int(row.get("judgmentCount") or 0)
+        except (TypeError, ValueError):
+            judgment_count = 0
+        if row.get("hasJudgments") is True or judgment_count > 0:
+            filtered.append(row)
     return {
         "data": {
             "results": filtered,
