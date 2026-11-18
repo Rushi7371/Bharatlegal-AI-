@@ -955,7 +955,6 @@ def court_judgment_search(
     }
     # Use the provider's recommended v2 search endpoint. Its filter names are
     # unchanged from v1; pageSize is the documented pagination parameter.
-    params["pageSize"] = params.pop("pageSize")
     payload = _ecourtsindia_data_get("/api/partner/v2/search", params)
     if not isinstance(payload, dict):
         raise HTTPException(502, "The judgment search provider returned an unexpected response.")
