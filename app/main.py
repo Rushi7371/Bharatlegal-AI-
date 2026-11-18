@@ -814,7 +814,7 @@ def court_data_status():
         "configured": bool(os.getenv("ECOURTSINDIA_PARTNER_API_KEY", "").strip()),
         "provider": "eCourtsIndia partner API",
         "provider_type": "Independent third-party data provider; not a Government of India API",
-        "available_modules": ["case-detail", "case-search", "cause-list", "available-dates", "court-structure", "order-ai"],
+        "available_modules": ["case-detail", "case-search", "judgment-search", "cause-list", "available-dates", "court-structure", "order-ai", "njdg-official-dashboard-embed"],
         "official_portal": "https://services.ecourts.gov.in/ecourtindia_v6/"
     }
 
@@ -851,6 +851,52 @@ def court_case_search(
     if state:
         params["stateCodes"] = state[:12]
     return _ecourtsindia_data_get("/api/partner/search", params)
+
+
+@app.get("/api/courts/judgments/search")
+def court_judgment_search(
+    query: str = "",
+    litigant: str = "",
+    judge: str = "",
+    advocate: str = "",
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Search provider-indexed records that are marked as having judgments."""
+    if not any((query.strip(), litigant.strip(), judge.strip(), advocate.strip())):
+        raise HTTPException(422, "Enter a judgment keyword, party, judge or advocate.")
+    if any(len(value) > limit for value, limit in (
+        (query, 180), (litigant, 120), (judge, 120), (advocate, 120)
+    )):
+        raise HTTPException(422, "Judgment search terms are too long.")
+    page = max(1, min(page, 10000))
+    page_size = max(1, min(page_size, 50))
+    params = {
+        "query": query.strip() or None,
+        "litigants": litigant.strip() or None,
+        "judges": judge.strip() or None,
+        "advocates": advocate.strip() or None,
+        "hasJudgments": "true",
+        "page": page,
+        "pageSize": page_size,
+    }
+    payload = _ecourtsindia_data_get("/api/partner/search", params)
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    results = data.get("results", []) if isinstance(data, dict) else []
+    # Defensively keep only records explicitly marked as containing judgments.
+    filtered = [row for row in results if row.get("hasJudgments") is True or int(row.get("judgmentCount") or 0) > 0]
+    return {
+        "data": {
+            "results": filtered,
+            "totalHits": data.get("totalHits", len(filtered)),
+            "page": data.get("page", page),
+            "pageSize": data.get("pageSize", page_size),
+            "returned": len(filtered),
+        },
+        "source": "eCourtsIndia partner API",
+        "official_government_api": False,
+        "notice": "Search index results are not certified copies. Verify every judgment and citation against the official court record.",
+    }
 
 
 @app.get("/api/courts/causelist")
