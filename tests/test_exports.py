@@ -16,6 +16,7 @@ from app.main import (
     export_scan_pdf,
     health,
     scan_translation_status,
+    _detect_source_language,
 )
 
 
@@ -34,6 +35,31 @@ class HealthTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             scan_translation_status("missing-regression-test-job")
         self.assertEqual(caught.exception.status_code, 404)
+
+
+class TranslationLanguageDetectionTests(unittest.TestCase):
+    def test_english_is_detected_from_latin_script(self):
+        self.assertEqual(_detect_source_language("This is a legal document written in English."), "English")
+
+    def test_clear_marathi_text_is_detected_without_provider_call(self):
+        sample = "माझ्या मते हा कायदा महाराष्ट्रातील नागरिकांसाठी आहे आणि आम्ही न्यायालयात अर्ज केला आहे."
+        self.assertEqual(_detect_source_language(sample), "Marathi")
+
+    def test_clear_hindi_text_is_detected_without_provider_call(self):
+        sample = "यह कानून नागरिकों के लिए है और न्यायालय में आवेदन करने के लिए यह जरूरी है।"
+        self.assertEqual(_detect_source_language(sample), "Hindi")
+
+    def test_ambiguous_devanagari_uses_provider_classification(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model", return_value="Marathi"):
+            self.assertEqual(_detect_source_language("प्रकरण क्रमांक १२३, अर्जदार आणि प्रतिवादी"), "Marathi")
+
+    def test_invalid_provider_classification_fails_safely(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model", return_value="possibly Hindi"):
+            with self.assertRaises(HTTPException) as caught:
+                _detect_source_language("प्रकरण क्रमांक १२३, अर्जदार आणि प्रतिवादी")
+            self.assertEqual(caught.exception.status_code, 503)
 
 
 class ExportTests(unittest.TestCase):
