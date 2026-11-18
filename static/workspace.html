@@ -30,48 +30,36 @@ function render(filter=''){const q=filter.toLowerCase();const rows=matters.filte
 
 const courtSelect=$('courtSelect'), stateSelect=$('stateSelect'), districtSelect=$('districtSelect'), districtWrap=$('districtWrap'), courtHint=$('courtHint');
 const mhDistricts=['Ahilyanagar (Ahmednagar)','Akola','Amravati','Beed','Bhandara','Buldhana','Chandrapur','Chhatrapati Sambhajinagar (Aurangabad)','Dharashiv (Osmanabad)','Dhule','Gadchiroli','Gondia','Hingoli','Jalgaon','Jalna','Kolhapur','Latur','Mumbai City','Mumbai Suburban','Nagpur','Nanded','Nandurbar','Nashik','Palghar','Parbhani','Pune','Raigad','Ratnagiri','Sangli','Satara','Sindhudurg','Solapur','Thane','Wardha','Washim','Yavatmal'];
-const stateCourtOptions={
-'Maharashtra':[
-{group:'Bombay High Court',items:['Bombay High Court — Principal Seat, Mumbai','Bombay High Court — Nagpur Bench','Bombay High Court — Aurangabad Bench (Chhatrapati Sambhajinagar)','Bombay High Court — Circuit Bench at Kolhapur']},
-{group:'Specialist courts / authorities',items:['City Civil & Sessions Court, Mumbai','Court of Small Causes, Mumbai','Family Court — Mumbai','Family Court — Pune','Family Court — Nagpur','Commercial Court — where established','Maharashtra State Consumer Disputes Redressal Commission','District Consumer Disputes Redressal Commission — select district','Other statutory tribunal / authority']}
-]};
+// Published Bombay High Court territorial mapping. Unlisted districts are deliberately not inferred.
+const mhBenchByDistrict={'Ahilyanagar (Ahmednagar)':'Aurangabad Bench','Akola':'Nagpur Bench','Amravati':'Nagpur Bench','Beed':'Aurangabad Bench','Bhandara':'Nagpur Bench','Buldhana':'Nagpur Bench','Chandrapur':'Nagpur Bench','Chhatrapati Sambhajinagar (Aurangabad)':'Aurangabad Bench','Dharashiv (Osmanabad)':'Aurangabad Bench','Dhule':'Aurangabad Bench','Gadchiroli':'Nagpur Bench','Gondia':'Nagpur Bench','Jalgaon':'Aurangabad Bench','Jalna':'Aurangabad Bench','Kolhapur':'Bombay Bench','Latur':'Aurangabad Bench','Mumbai City':'Bombay Principal Seat','Mumbai Suburban':'Bombay Principal Seat','Nanded':'Aurangabad Bench','Nandurbar':'Aurangabad Bench','Nashik':'Bombay Bench','Pune':'Bombay Bench','Raigad':'Bombay Bench','Ratnagiri':'Bombay Bench','Sangli':'Bombay Bench','Satara':'Bombay Bench','Sindhudurg':'Bombay Bench','Solapur':'Bombay Bench','Thane':'Bombay Bench','Wardha':'Nagpur Bench','Washim':'Nagpur Bench','Yavatmal':'Nagpur Bench'};
+const mhSpecialistCourts=['City Civil Court — Mumbai (verify subject-matter jurisdiction)','Court of Small Causes — Mumbai (verify subject-matter jurisdiction)','Chief Metropolitan Magistrate Court — Mumbai','Family Court — select city / district; verify establishment','Commercial Court — select district; verify establishment','Motor Accident Claims Tribunal — select district; verify establishment','Consumer Disputes Redressal Commission — select level / district','Co-operative Court / Tribunal — verify territorial jurisdiction','Industrial / Labour Court — verify territorial jurisdiction','Other statutory tribunal / authority — specify from official records'];
+function addCourtGroup(label,items){const og=document.createElement('optgroup');og.label=label;items.forEach(item=>{const o=document.createElement('option');o.value=item;o.textContent=item;og.appendChild(o)});courtSelect.appendChild(og)}
 function populateCourts(){
- const state=stateSelect.value, district=districtSelect.value;
- courtSelect.innerHTML='';
- const ph=document.createElement('option');ph.value='';ph.textContent=state?(state==='Maharashtra'&&!district?'Select district first':'Choose a court or authority'):'Select State / UT first';courtSelect.appendChild(ph);
- if(!state || (state==='Maharashtra'&&!district)){courtSelect.disabled=true;return}
- const groups=[];
- if(stateCourtOptions[state])groups.push(...stateCourtOptions[state]);
+ const state=stateSelect.value,district=districtSelect.value;courtSelect.innerHTML='';
+ const ph=document.createElement('option');ph.value='';ph.textContent=state?(state==='Maharashtra'&&!district?'Select district first':'Choose court level / establishment'):'Select State / UT first';courtSelect.appendChild(ph);
+ if(!state||(state==='Maharashtra'&&!district)){courtSelect.disabled=true;courtHint.textContent='Select Maharashtra and a district to load the available court levels.';return}
  if(state==='Maharashtra'){
-  groups.unshift({group:'District courts — '+district,items:[
-   'District & Sessions Court — '+district,
-   'Civil Judge, Senior Division — '+district,
-   'Civil Judge, Junior Division — '+district,
-   'Chief Judicial Magistrate / Judicial Magistrate First Class — '+district,
-   'Other court establishment in — '+district
-  ]});
- } else {
-  groups.push({group:'Court levels — confirm local establishment',items:[
-   state+' High Court','District & Sessions Court — select district',
-   'Civil Court — select district','Family Court — where established',
-   'Commercial Court — where established','Chief Judicial Magistrate / Judicial Magistrate First Class Court',
-   'Consumer Disputes Redressal Commission — where established','Other statutory tribunal / authority'
-  ]});
+  addCourtGroup('District / subordinate court levels — '+district,['District & Sessions Court — '+district,'Civil Judge, Senior Division — '+district,'Civil Judge, Junior Division — '+district,'Chief Judicial Magistrate / Judicial Magistrate First Class — '+district,'Other court establishment / taluka court — '+district]);
+  const bench=mhBenchByDistrict[district];
+  if(bench)addCourtGroup('Bombay High Court territorial jurisdiction — published mapping',['Bombay High Court — '+bench]);
+  else addCourtGroup('Bombay High Court — jurisdiction to verify',['Select bench only after checking the official territorial jurisdiction list']);
+  addCourtGroup('Specialist courts / tribunals — confirm local establishment',mhSpecialistCourts);
+  courtSelect.disabled=false;
+  const benchText=bench?'Published High Court territorial mapping: '+bench+'.':'The official High Court jurisdiction page does not explicitly list this district in the retrieved mapping; verify with the Registry.';
+  courtHint.innerHTML=benchText+' These are court levels / categories, not a live list of individual courtrooms or sitting judges. Check <a href="https://services.ecourts.gov.in/ecourtindia_v6/" target="_blank" rel="noopener">eCourts District Court Services</a> for the current court complex and establishment, and the <a href="https://bombayhighcourt.gov.in/bhc/jurisdiction" target="_blank" rel="noopener">Bombay High Court jurisdiction page</a> before filing.';
+ }else{
+  addCourtGroup('General court levels — local establishment must be verified',[state+' High Court','District & Sessions Court — select district','Civil Court — select district','Family Court — where established','Commercial Court — where established','Chief Judicial Magistrate / Judicial Magistrate First Class Court','Consumer Disputes Redressal Commission — where established','Other statutory tribunal / authority']);
+  courtSelect.disabled=false;
+  courtHint.innerHTML='These are generic court levels, not a verified court directory for this State / UT. Confirm the exact court complex through <a href="https://ecourts.gov.in/ecourts2.0/?p=dist_court" target="_blank" rel="noopener">eCourts State / District directory</a> before filing.';
  }
- groups.forEach(g=>{const og=document.createElement('optgroup');og.label=g.group;g.items.forEach(item=>{const o=document.createElement('option');o.value=item;o.textContent=item;og.appendChild(o)});courtSelect.appendChild(og)});
- courtSelect.disabled=false;
- courtHint.textContent=state==='Maharashtra'?'Options are filtered by district. Select the court designation shown on the case papers; verify the exact court complex and jurisdiction before filing.':'Choose the appropriate court level and verify its local establishment and jurisdiction.';
 }
 function populateDistricts(){
  const state=stateSelect.value;districtSelect.innerHTML='<option value="">Select district</option>';
- if(state==='Maharashtra'){
-  districtWrap.classList.remove('hidden');
-  mhDistricts.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;districtSelect.appendChild(o)});
- }else{districtWrap.classList.add('hidden');districtSelect.value=''}
+ if(state==='Maharashtra'){districtWrap.classList.remove('hidden');mhDistricts.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;districtSelect.appendChild(o)})}
+ else{districtWrap.classList.add('hidden');districtSelect.value=''}
  populateCourts();
 }
-stateSelect.addEventListener('change',populateDistricts);
-districtSelect.addEventListener('change',populateCourts);
+stateSelect.addEventListener('change',populateDistricts);districtSelect.addEventListener('change',populateCourts);
 function open(){ $('modal').classList.add('open') }function close(){ $('modal').classList.remove('open') }
 $('newMatter').onclick=open;$('addMatter').onclick=open;$('closeModal').onclick=close;$('cancelModal').onclick=close;$('modal').onclick=e=>{if(e.target===$('modal'))close()};$('navMatters').onclick=()=>document.getElementById('matters').scrollIntoView({behavior:'smooth'});$('openMatters').onclick=()=>document.getElementById('matters').scrollIntoView({behavior:'smooth'});$('globalSearch').oninput=e=>render(e.target.value);
 function ask(){const q=$('legalPrompt').value.trim();if(q)location.href='/classic?prompt='+encodeURIComponent(q)}$('askPrompt').onclick=ask;$('legalPrompt').addEventListener('keydown',e=>{if(e.key==='Enter')ask()});
