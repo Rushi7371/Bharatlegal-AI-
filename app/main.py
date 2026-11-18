@@ -764,6 +764,7 @@ def _ecourtsindia_data_get(path: str, query: dict | None = None, method: str = "
         "/api/partner/v2/search",
         "/api/partner/v2/facets/search",
         "/api/partner/causelist/",
+        "/api/partner/acts/",
         "/api/partner/enums",
     )
     if not path.startswith(allowed):
@@ -821,6 +822,34 @@ def court_data_status():
         "available_modules": ["case-detail", "case-search", "judgment-search", "cause-list", "available-dates", "court-structure", "order-ai", "njdg-official-dashboard-embed"],
         "official_portal": "https://services.ecourts.gov.in/ecourtindia_v6/"
     }
+
+
+@app.get("/api/courts/acts/search")
+def court_acts_search(q: str, state: str = "", limit: int = 20):
+    """Search statutory provisions. The upstream provider charges per search request."""
+    q = q.strip()
+    if not q or len(q) > 200:
+        raise HTTPException(422, "Enter a search term up to 200 characters.")
+    if state and (len(state) > 12 or not state.replace("-", "").isalnum()):
+        raise HTTPException(422, "Invalid state code.")
+    limit = max(1, min(limit, 50))
+    params = {"q": q, "limit": limit, "state": state or None}
+    return _ecourtsindia_data_get("/api/partner/acts/search", params)
+
+
+@app.get("/api/courts/acts/section/{act_key:path}/{number}")
+def court_act_section(act_key: str, number: str, unit: str = "s"):
+    """Fetch one provision; provider billing applies per distinct section returned."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,12}/[A-Za-z0-9_-]{1,24}(?:/[A-Za-z0-9_-]{1,24})?", act_key):
+        raise HTTPException(422, "Invalid Act citation key.")
+    if not re.fullmatch(r"[A-Za-z0-9()./-]{1,32}", number):
+        raise HTTPException(422, "Invalid section / rule number.")
+    if unit not in {"s", "a", "r", "o", "sch", "para", "hsn", "slab", "doc"}:
+        raise HTTPException(422, "Unsupported provision type.")
+    from urllib.parse import quote
+    path = "/api/partner/acts/" + quote(act_key, safe="/") + "/sections/" + quote(number, safe="")
+    return _ecourtsindia_data_get(path, {"unit": unit})
 
 
 @app.get("/api/courts/case/{cnr}")
