@@ -104,15 +104,28 @@ class TranslationPipelineTests(unittest.TestCase):
     def test_auto_detected_marathi_is_used_in_translation_prompt(self):
         from unittest.mock import patch
         source = "माझ्या मते हा कायदा महाराष्ट्रातील नागरिकांसाठी आहे आणि आम्ही न्यायालयात अर्ज केला आहे. हा अर्ज आज सादर केला आहे."
-        output = "हा कायदा नागरिकांसाठी महत्त्वाचा आहे. आम्ही न्यायालयात अर्ज सादर केला आहे आणि त्याची योग्य तपासणी करणे आवश्यक आहे."
+        output = "The law protects citizens and allows them to submit an application before the appropriate court."
         with patch("app.main.ask_model", return_value=output) as model:
             result = _process_scan_translation(
                 source.encode("utf-8"), "sample.txt", "text/plain",
-                "Auto-detect", "Marathi"
+                "Auto-detect", "English"
             )
         self.assertEqual(result["source_language"], "Marathi")
         self.assertEqual(result["translated_text"], output)
-        self.assertIn("from Marathi into Marathi", model.call_args.args[0])
+        self.assertIn("from Marathi into English", model.call_args.args[0])
+
+    def test_same_source_and_target_language_is_rejected(self):
+        from unittest.mock import patch
+        source = "माझ्या मते हा कायदा महाराष्ट्रातील नागरिकांसाठी आहे आणि आम्ही न्यायालयात अर्ज केला आहे. हा अर्ज आज सादर केला आहे."
+        with patch("app.main.ask_model") as model:
+            with self.assertRaises(HTTPException) as caught:
+                _process_scan_translation(
+                    source.encode("utf-8"), "sample.txt", "text/plain",
+                    "Auto-detect", "Marathi"
+                )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("already in Marathi", str(caught.exception.detail))
+        model.assert_not_called()
 
     def test_explicit_source_language_skips_auto_classification(self):
         from unittest.mock import patch
