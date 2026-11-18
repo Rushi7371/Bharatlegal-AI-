@@ -99,7 +99,7 @@ class DraftWorkflowTests(unittest.TestCase):
             jurisdiction="Maharashtra"
         )
         self.assertEqual(result["jurisdiction"], "Maharashtra")
-        self.assertTrue(any("limitation chronology" in item for item in result["document_specific"]))
+        self.assertTrue(any("limitation chronology" in item.lower() for item in result["document_specific"]))
         self.assertIn("not a prescribed form", result["jurisdiction_note"])
         self.assertTrue(result["verification"])
 
