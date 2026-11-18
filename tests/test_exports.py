@@ -18,6 +18,9 @@ from app.main import (
     scan_translation_status,
     _detect_source_language,
     _process_scan_translation,
+    DraftRequest,
+    draft,
+    draft_requirements,
 )
 
 
@@ -62,6 +65,48 @@ class TranslationLanguageDetectionTests(unittest.TestCase):
                 _detect_source_language("प्रकरण क्रमांक १२३, अर्जदार आणि प्रतिवादी")
             self.assertEqual(caught.exception.status_code, 503)
 
+
+
+class DraftWorkflowTests(unittest.TestCase):
+    def test_initial_draft_uses_placeholders_and_verification_safeguards(self):
+        from unittest.mock import patch
+        generated = "WORKING DRAFT\\n[Applicant name]\\n[Date]\\nVerification checklist"
+        with patch("app.main.ask_model", return_value=generated) as model:
+            result = draft(DraftRequest(
+                document_type="Petition / pleading outline",
+                facts="A tenant seeks relief after a disputed eviction notice.",
+                jurisdiction="Maharashtra",
+                language="English"
+            ))
+        self.assertEqual(result["draft"], generated)
+        prompt = model.call_args.args[0]
+        self.assertIn("bracketed placeholders for missing details", prompt)
+        self.assertIn("Do not invent facts, statutory citations, case law", prompt)
+        self.assertIn("advocate review warning", prompt)
+        self.assertIn("Maharashtra", prompt)
+
+    def test_draft_requires_facts(self):
+        with self.assertRaises(HTTPException) as caught:
+            draft(DraftRequest(
+                document_type="Legal notice", facts="   ",
+                jurisdiction="Maharashtra"
+            ))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_draft_requirements_returns_jurisdiction_specific_caveat(self):
+        result = draft_requirements(
+            document_type="Petition / pleading outline",
+            jurisdiction="Maharashtra"
+        )
+        self.assertEqual(result["jurisdiction"], "Maharashtra")
+        self.assertTrue(any("limitation chronology" in item for item in result["document_specific"]))
+        self.assertIn("not a prescribed form", result["jurisdiction_note"])
+        self.assertTrue(result["verification"])
+
+    def test_draft_requirements_rejects_empty_jurisdiction(self):
+        with self.assertRaises(HTTPException) as caught:
+            draft_requirements(document_type="Legal notice", jurisdiction=" ")
+        self.assertEqual(caught.exception.status_code, 400)
 
 class ExportTests(unittest.TestCase):
     def test_scanner_docx_export_is_valid_zip(self):
