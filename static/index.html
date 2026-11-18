@@ -32,7 +32,21 @@ loadDraftRequirements();
 const detailIds=['draftCourt','draftPlace','draftDistrict','draftTaluka','draftPoliceStation','draftCourtLevel','draftLocalLanguage','draftApplicant','draftRespondent','draftApplicantAddress','draftRespondentAddress','draftEventDate','draftDocumentDate','draftFilingDate','draftCaseNo','draftAdvocate','draftRelief','draftAnnexures','draftOther'];
 $('draftBtn').addEventListener('click',()=>{$('draftDetails').classList.add('hidden');$('addParticulars').classList.add('hidden')});
 $('addParticulars').onclick=()=>{const p=$('draftDetails');p.classList.toggle('hidden');$('addParticulars').textContent=p.classList.contains('hidden')?'Add / edit document particulars →':'Hide document particulars ↑';if(!p.classList.contains('hidden'))p.scrollIntoView({behavior:'smooth',block:'start'});};
-$('finalizeDraft').onclick=async()=>{const state=$('jurisdiction').value;if(!state)return alert('Select a state or Union Territory first.');const labels=['Court / authority','Place','District','Taluka / tehsil','Police station (if relevant)','Court level / forum','Local language / filing language','Applicant / petitioner / sender','Respondent / opposite party','Applicant address and contact','Opposite party address','Relevant event date','Notice / order / agreement date','Proposed filing / signing date','Case / reference number','Advocate name','Specific relief / request sought','Supporting documents / annexures','Other particulars'];const vals=detailIds.map(id=>$(id).value.trim());const extras=vals.map((v,i)=>v?labels[i]+': '+v:'').filter(Boolean).join('\\n');const facts=$('draftFacts').value+'\\n\\nJURISDICTION: '+state+'\\nADDITIONAL DOCUMENT PARTICULARS:\\n'+(extras||'No additional particulars supplied.');const b=$('finalizeDraft');loading(b,true,'Update draft with these details →');try{const d=await post('/api/draft',{document_type:$('draftType').value,facts,jurisdiction:state,language:({en:'English',hi:'Hindi',mr:'Marathi'})[$('languageSelect').value]});lastDraft=d.draft;result($('draftResult'),lastDraft);$('copyDraft').classList.remove('hidden');$('exportDraftWord').classList.remove('hidden');$('exportDraftPdf').classList.remove('hidden');$('draftResult').scrollIntoView({behavior:'smooth',block:'start'});}catch(e){result($('draftResult'),e.message)}finally{loading(b,false,'Update draft with these details →')}};
+$('finalizeDraft').onclick=async()=>{
+ const state=$('jurisdiction').value;
+ if(!state)return alert('Select a state or Union Territory first.');
+ const keys=['court','place','district','taluka','police_station','court_level','local_language','applicant','respondent','applicant_address','respondent_address','event_date','document_date','filing_date','case_number','advocate','relief','annexures','other'];
+ const particulars=Object.fromEntries(keys.map((key,i)=>[key,$(detailIds[i]).value.trim()]).filter(([,value])=>value));
+ if(!Object.keys(particulars).length)return alert('Add at least one document particular before updating the draft.');
+ const b=$('finalizeDraft');loading(b,true,'Update draft with these details →');
+ try{
+  const d=await post('/api/draft',{document_type:$('draftType').value,facts:$('draftFacts').value,jurisdiction:state,language:({en:'English',hi:'Hindi',mr:'Marathi'})[$('languageSelect').value],particulars});
+  lastDraft=d.draft;result($('draftResult'),lastDraft);
+  $('copyDraft').classList.remove('hidden');$('exportDraftWord').classList.remove('hidden');$('exportDraftPdf').classList.remove('hidden');
+  $('draftResult').scrollIntoView({behavior:'smooth',block:'start'});
+ }catch(e){result($('draftResult'),e.message)}
+ finally{loading(b,false,'Update draft with these details →')}
+};
 
 
 async function exportWorkingDraft(format){
