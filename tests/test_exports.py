@@ -85,6 +85,53 @@ class DraftWorkflowTests(unittest.TestCase):
         self.assertIn("advocate review warning", prompt)
         self.assertIn("Maharashtra", prompt)
 
+
+    def test_structured_particulars_are_passed_separately_and_preserved(self):
+        from unittest.mock import patch
+        generated = "Updated draft with party names and dates."
+        particulars = {
+            "applicant": "Asha Patil",
+            "respondent": "Example Housing Pvt Ltd",
+            "event_date": "2026-03-14",
+            "district": "Pune",
+            "untrusted_extra_field": "Ignore this value"
+        }
+        with patch("app.main.ask_model", return_value=generated) as model:
+            result = draft(DraftRequest(
+                document_type="Legal notice",
+                facts="The applicant disputes a service charge.",
+                jurisdiction="Maharashtra",
+                language="English",
+                particulars=particulars
+            ))
+        self.assertEqual(result["draft"], generated)
+        prompt = model.call_args.args[0]
+        self.assertIn("Applicant: Asha Patil", prompt)
+        self.assertIn("Respondent: Example Housing Pvt Ltd", prompt)
+        self.assertIn("Event Date: 2026-03-14", prompt)
+        self.assertNotIn("Ignore this value", prompt)
+        self.assertIn("Do not silently resolve contradictions", prompt)
+
+    def test_structured_particular_over_limit_is_rejected(self):
+        with self.assertRaises(HTTPException) as caught:
+            draft(DraftRequest(
+                document_type="Legal notice",
+                facts="Facts supplied.",
+                jurisdiction="Maharashtra",
+                particulars={"applicant": "A" * 3001}
+            ))
+        self.assertEqual(caught.exception.status_code, 413)
+
+    def test_draft_rejects_unsupported_output_language(self):
+        with self.assertRaises(HTTPException) as caught:
+            draft(DraftRequest(
+                document_type="Legal notice",
+                facts="Facts supplied.",
+                jurisdiction="Maharashtra",
+                language="French"
+            ))
+        self.assertEqual(caught.exception.status_code, 400)
+
     def test_draft_requires_facts(self):
         with self.assertRaises(HTTPException) as caught:
             draft(DraftRequest(
