@@ -953,12 +953,22 @@ def court_judgment_search(
         "page": page,
         "pageSize": page_size,
     }
-    payload = _ecourtsindia_data_get("/api/partner/search", params)
-    data = payload.get("data", payload) if isinstance(payload, dict) else {}
-    results = data.get("results", []) if isinstance(data, dict) else []
-    # Defensively keep only records explicitly marked as containing judgments.
+    # Use the provider's recommended v2 search endpoint. Its filter names are
+    # unchanged from v1; pageSize is the documented pagination parameter.
+    params["pageSize"] = params.pop("pageSize")
+    payload = _ecourtsindia_data_get("/api/partner/v2/search", params)
+    if not isinstance(payload, dict):
+        raise HTTPException(502, "The judgment search provider returned an unexpected response.")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise HTTPException(502, "The judgment search response did not contain the expected results structure.")
+    results = data["results"]
+    # Keep only records explicitly marked as containing judgments. Do not
+    # silently treat malformed rows or an unknown response as zero results.
     filtered = []
     for row in results:
+        if not isinstance(row, dict):
+            continue
         try:
             judgment_count = int(row.get("judgmentCount") or 0)
         except (TypeError, ValueError):
@@ -971,8 +981,10 @@ def court_judgment_search(
             "totalHits": data.get("totalHits", len(filtered)),
             "page": data.get("page", page),
             "pageSize": data.get("pageSize", page_size),
+            "facetMode": data.get("facetMode"),
             "returned": len(filtered),
         },
+        "meta": payload.get("meta", {}),
         "source": "eCourtsIndia partner API",
         "official_government_api": False,
         "notice": "Search index results are not certified copies. Verify every judgment and citation against the official court record.",
