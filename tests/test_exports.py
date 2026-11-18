@@ -515,7 +515,7 @@ class NativeCourtWorkspaceApiTests(unittest.TestCase):
         workspace = (Path(__file__).resolve().parents[1] / "static" / "court-services.html").read_text(encoding="utf-8")
         self.assertIn('data-tab="judgments"', workspace)
         self.assertIn('data-tab="njdg"', workspace)
-        self.assertIn("/api/courts/judgments/search", workspace)
+        self.assertIn("/judgments/search?", workspace)
         self.assertIn("njdg.ecourts.gov.in/njdg_v3/", workspace)
         self.assertIn("NJDG data is supplied by the official eCourts dashboard", workspace)
 
