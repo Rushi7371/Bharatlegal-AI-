@@ -329,6 +329,47 @@ def scan_translation_status(job_id: str):
             response["result"] = job["result"]
         return response
 
+def _detect_source_language(text: str) -> str:
+    """Identify English, Hindi or Marathi text; Devanagari script alone cannot distinguish Hindi from Marathi."""
+    import re
+    sample = (text or "").strip()[:5000]
+    if not sample:
+        raise HTTPException(422, "No readable text is available for language detection.")
+    devanagari = sum(1 for ch in sample if 0x0900 <= ord(ch) <= 0x097F and ch.isalpha())
+    latin = sum(1 for ch in sample if ch.isascii() and ch.isalpha())
+    if latin > devanagari * 1.25:
+        return "English"
+    if devanagari == 0:
+        return "English"
+    # Marathi-exclusive/common lexical and grammatical signals. This is only a
+    # fast path for clear cases; mixed or ambiguous Devanagari is classified by AI.
+    marathi_markers = re.findall(
+        r"\\b(?:आहे|आहेत|नाही|नाहीत|म्हणजे|माझ्या|आम्ही|तुम्ही|त्यांनी|यांनी|करण्यासाठी|झाले|झाली|होते|असते|कायदा|न्यायालयात|महाराष्ट्रातील)\\b",
+        sample
+    )
+    hindi_markers = re.findall(
+        r"\\b(?:है|हैं|नहीं|था|थी|थे|करने|लिए|लेकिन|क्योंकि|आपका|हमारा|उसका|इसलिए|न्यायालय)\\b",
+        sample
+    )
+    if len(marathi_markers) >= 2 and len(marathi_markers) > len(hindi_markers):
+        return "Marathi"
+    if len(hindi_markers) >= 2 and len(hindi_markers) > len(marathi_markers):
+        return "Hindi"
+    # Hindi and Marathi share Devanagari. Never guess Hindi merely because
+    # Devanagari is present: ask the configured provider to classify the text.
+    prompt = (
+        "Identify the primary language of this Indian text. Choose exactly one label: "
+        "English, Hindi, or Marathi. Distinguish Hindi from Marathi by vocabulary and "
+        "grammar, not by script (both commonly use Devanagari). If mixed, choose the "
+        "dominant language. Return only the single label.\\n\\nTEXT:\\n" + sample
+    )
+    detected = ask_model(prompt, "English").strip().strip(" .\\\"'").lower()
+    mapping = {"english": "English", "hindi": "Hindi", "marathi": "Marathi"}
+    if detected not in mapping:
+        raise HTTPException(503, "Could not reliably identify whether the Devanagari document is Hindi or Marathi. Select the source language manually and retry.")
+    return mapping[detected]
+
+
 def _process_scan_translation(data: bytes, filename: str, mime: str, source_language: str, target_language: str, progress_callback=None):
     """Run local OCR and offline translation in a worker thread."""
     def progress(message):
@@ -487,14 +528,10 @@ def _process_scan_translation(data: bytes, filename: str, mime: str, source_lang
         # being KILLED while scan jobs were running, which erased the in-memory job
         # registry and caused the client to report "Could not check translation status".
         # Keep OCR local, but run translation through the configured API provider.
-        lang_code = {"English": "en", "Hindi": "hi", "Marathi": "mr"}
-        src = lang_code.get(source_language)
-        if not src:
-            devanagari = sum(1 for ch in original if 0x0900 <= ord(ch) <= 0x097F)
-            latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
-            src = "en" if latin >= devanagari else "hi"
-        lang_names = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
-        detected_source = lang_names.get(src, source_language)
+        if source_language in {"English", "Hindi", "Marathi"}:
+            detected_source = source_language
+        else:
+            detected_source = _detect_source_language(original)
         translated_parts = []
         paragraphs = [p.strip() for p in original.splitlines() if p.strip()]
         chunks = []
