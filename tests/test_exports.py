@@ -141,6 +141,31 @@ class TranslationPipelineTests(unittest.TestCase):
         self.assertEqual(result["source_language"], "English")
         self.assertIn("from English into Marathi", model.call_args.args[0])
 
+    def test_image_ocr_text_is_passed_to_translation_provider(self):
+        from unittest.mock import patch
+        from io import BytesIO
+        from PIL import Image
+        source = (
+            "The applicant submits this written statement before the court. "
+            "The incident occurred on the stated date and supporting records are attached."
+        )
+        output = (
+            "अर्जदार न्यायालयासमोर हे लेखी निवेदन सादर करीत आहे. "
+            "घटना नमूद केलेल्या दिवशी घडली असून संबंधित कागदपत्रे जोडली आहेत."
+        )
+        image_buffer = BytesIO()
+        Image.new("RGB", (1200, 500), "white").save(image_buffer, format="PNG")
+        with patch("pytesseract.image_to_string", return_value=source), patch(
+            "app.main.ask_model", return_value=output
+        ) as model:
+            result = _process_scan_translation(
+                image_buffer.getvalue(), "sample.png", "image/png",
+                "English", "Marathi"
+            )
+        self.assertEqual(result["extracted_text"], source)
+        self.assertEqual(result["translated_text"], output)
+        self.assertIn("from English into Marathi", model.call_args.args[0])
+
     def test_provider_unavailable_is_returned_as_clear_503(self):
         from unittest.mock import patch
         source = "This is a sufficiently long English legal document with facts and dates for translation."
