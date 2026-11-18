@@ -907,7 +907,7 @@ def court_advanced_search(
         # FIR search is available in the official eCourts user interface, but no FIR-number search
         # filter is documented in the connected partner Case Search API. Never approximate it.
         raise HTTPException(501, "FIR-number search is not currently exposed by the connected partner API. This search is not simulated.")
-    return _ecourtsindia_data_get("/api/partner/v2/search", params)
+    return _ecourtsindia_data_get("/api/partner/search", params)
 
 
 @app.get("/api/courts/judgments/search")
