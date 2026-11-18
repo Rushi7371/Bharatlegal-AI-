@@ -882,6 +882,7 @@ def court_advanced_search(
     params = {"page": max(1, min(page, 10000)), "pageSize": max(1, min(page_size, 50))}
     if court_code: params["courtCodes"] = court_code
     if state: params["stateCodes"] = state[:12]
+    if year: params["filingYears"] = str(year)
     if case_status.upper() != "BOTH": params["caseStatus"] = case_status.upper()
     if kind == "party":
         value = party_name.strip()
@@ -892,7 +893,6 @@ def court_advanced_search(
         if not case_number.strip() or not year:
             raise HTTPException(422, "Case number and year are required.")
         params["query"] = case_number.strip()[:80]
-        params["filingYears"] = str(year)
         if case_type.strip(): params["caseTypes"] = case_type.strip()[:40]
     elif kind == "advocate":
         if advocate_name.strip():
