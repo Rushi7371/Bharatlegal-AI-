@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,7 @@ app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focuse
 
 # Persistent user accounts and cloud-synchronised matter records.
 import sqlite3, secrets, hashlib, hmac, time, re
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, Field
 
@@ -23,30 +24,37 @@ _SESSION_COOKIE = "bharatlegal_session"
 _SESSION_TTL = 60 * 60 * 24 * 14
 _PASSWORD_ITERATIONS = 310_000
 
+@contextmanager
 def _account_db():
     _ACCOUNT_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_ACCOUNT_DB), timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript("""
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS sessions (
-        token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS matters (
-        id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        PRIMARY KEY(user_id, id)
-      );
-    """)
-    return conn
-
+    try:
+        conn.executescript("""
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS matters (
+            id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, id)
+          );
+        """)
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 def _password_digest(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS).hex()
 
@@ -87,7 +95,7 @@ class MatterPayload(BaseModel):
     data: dict
 
 @app.post("/api/account/register")
-def account_register(body: AccountCredentials, response):
+def account_register(body: AccountCredentials, response: Response):
     email = body.email.strip().lower()
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise HTTPException(422, "Enter a valid email address.")
@@ -106,7 +114,7 @@ def account_register(body: AccountCredentials, response):
     return {"user": {"id": user_id, "email": email}, "message": "Account created. Add an email-verification workflow before enabling public production sign-ups."}
 
 @app.post("/api/account/login")
-def account_login(body: AccountCredentials, response):
+def account_login(body: AccountCredentials, response: Response):
     email = body.email.strip().lower()
     with _account_db() as conn:
         row = conn.execute("SELECT id,email,password_hash,password_salt FROM users WHERE email=?", (email,)).fetchone()
@@ -121,7 +129,7 @@ def account_me(request: Request):
     return {"user": _current_user(request)}
 
 @app.post("/api/account/logout")
-def account_logout(request: Request, response):
+def account_logout(request: Request, response: Response):
     token = request.cookies.get(_SESSION_COOKIE)
     if token:
         with _account_db() as conn:
