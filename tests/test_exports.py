@@ -28,6 +28,7 @@ from app.main import (
     _ecourtsindia_partner_get,
     court_case_detail,
     court_case_search,
+    court_judgment_search,
     court_cause_list,
     court_available_dates,
     court_order_ai,
@@ -467,6 +468,27 @@ class NativeCourtWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(provider.call_args.args[1]["page"], 1)
         self.assertEqual(provider.call_args.args[1]["pageSize"], 50)
 
+    def test_judgment_search_requires_term_and_filters_to_judgment_records(self):
+        from unittest.mock import patch
+        with self.assertRaises(HTTPException) as caught:
+            court_judgment_search()
+        self.assertEqual(caught.exception.status_code, 422)
+        provider_payload = {"data": {"results": [
+            {"cnr": "ABCD010000012024", "hasJudgments": True, "judgmentCount": 1},
+            {"cnr": "EFGH010000012024", "hasJudgments": False, "judgmentCount": 0},
+            {"cnr": "IJKL010000012024", "judgmentCount": 2},
+        ], "totalHits": 3}}
+        with patch("app.main._ecourtsindia_data_get", return_value=provider_payload) as provider:
+            result = court_judgment_search(query="natural justice", page=0, page_size=100)
+        params = provider.call_args.args[1]
+        self.assertEqual(params["hasJudgments"], "true")
+        self.assertEqual(params["page"], 1)
+        self.assertEqual(params["pageSize"], 50)
+        self.assertEqual([row["cnr"] for row in result["data"]["results"]], [
+            "ABCD010000012024", "IJKL010000012024"
+        ])
+        self.assertFalse(result["official_government_api"])
+
     def test_cause_list_requires_filter_and_limits_pagination(self):
         from unittest.mock import patch
         with self.assertRaises(HTTPException) as caught:
@@ -487,6 +509,15 @@ class NativeCourtWorkspaceApiTests(unittest.TestCase):
         with patch("app.main._ecourtsindia_data_get", return_value={"data": []}) as provider:
             court_available_dates(state="MH")
         self.assertEqual(provider.call_args.args[0], "/api/partner/causelist/available-dates")
+
+    def test_court_workspace_contains_judgment_and_njdg_modules(self):
+        from pathlib import Path
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "court-services.html").read_text(encoding="utf-8")
+        self.assertIn('data-tab="judgments"', workspace)
+        self.assertIn('data-tab="njdg"', workspace)
+        self.assertIn("/api/courts/judgments/search", workspace)
+        self.assertIn("njdg.ecourts.gov.in/njdg_v3/", workspace)
+        self.assertIn("NJDG data is supplied by the official eCourts dashboard", workspace)
 
     def test_order_ai_rejects_path_injection(self):
         from unittest.mock import patch
