@@ -13,6 +13,153 @@ _TRANSLATION_MODELS = {}
 _TRANSLATION_MODEL_LOCK = threading.Lock()
 app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focused legal workflow assistant")
 
+# Persistent user accounts and cloud-synchronised matter records.
+import sqlite3, secrets, hashlib, hmac, time, re
+from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel, Field
+
+_ACCOUNT_DB = Path(os.getenv("BHARATLEGAL_DB_PATH", str(BASE / "bharatlegal.sqlite3")))
+_SESSION_COOKIE = "bharatlegal_session"
+_SESSION_TTL = 60 * 60 * 24 * 14
+_PASSWORD_ITERATIONS = 310_000
+
+def _account_db():
+    _ACCOUNT_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_ACCOUNT_DB), timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript("""
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS matters (
+        id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, id)
+      );
+    """)
+    return conn
+
+def _password_digest(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS).hex()
+
+def _session_secret() -> bytes:
+    value = os.getenv("BHARATLEGAL_SESSION_SECRET", "")
+    if len(value) < 32:
+        raise HTTPException(503, "Account service is not configured. Contact the BharatLegal administrator.")
+    return value.encode("utf-8")
+
+def _new_session(user_id: str, response):
+    token = secrets.token_urlsafe(48)
+    now = int(time.time())
+    with _account_db() as conn:
+        conn.execute("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)",
+                     (hashlib.sha256(token.encode()).hexdigest(), user_id, now + _SESSION_TTL,
+                      datetime.now(timezone.utc).isoformat()))
+    response.set_cookie(_SESSION_COOKIE, token, max_age=_SESSION_TTL, httponly=True,
+                        secure=True, samesite="lax", path="/")
+    
+def _current_user(request: Request):
+    token = request.cookies.get(_SESSION_COOKIE)
+    if not token or len(token) > 200:
+        raise HTTPException(401, "Please sign in to continue.")
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    with _account_db() as conn:
+        row = conn.execute("SELECT u.id,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?",
+                           (digest, int(time.time()))).fetchone()
+    if not row:
+        raise HTTPException(401, "Your session has expired. Please sign in again.")
+    return {"id": row["id"], "email": row["email"]}
+
+class AccountCredentials(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+
+class MatterPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    data: dict
+
+@app.post("/api/account/register")
+def account_register(body: AccountCredentials, response):
+    email = body.email.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise HTTPException(422, "Enter a valid email address.")
+    if len(body.password) < 12 or not re.search(r"[A-Za-z]", body.password) or not re.search(r"\d", body.password):
+        raise HTTPException(422, "Use at least 12 characters, including a letter and a number.")
+    _session_secret()
+    user_id, salt = secrets.token_urlsafe(18), secrets.token_bytes(16)
+    digest = _password_digest(body.password, salt)
+    try:
+        with _account_db() as conn:
+            conn.execute("INSERT INTO users(id,email,password_hash,password_salt,created_at) VALUES(?,?,?,?,?)",
+                         (user_id, email, digest, salt.hex(), datetime.now(timezone.utc).isoformat()))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "An account with this email already exists.")
+    _new_session(user_id, response)
+    return {"user": {"id": user_id, "email": email}, "message": "Account created. Add an email-verification workflow before enabling public production sign-ups."}
+
+@app.post("/api/account/login")
+def account_login(body: AccountCredentials, response):
+    email = body.email.strip().lower()
+    with _account_db() as conn:
+        row = conn.execute("SELECT id,email,password_hash,password_salt FROM users WHERE email=?", (email,)).fetchone()
+    if not row or not hmac.compare_digest(_password_digest(body.password, bytes.fromhex(row["password_salt"])), row["password_hash"]):
+        raise HTTPException(401, "Email or password is incorrect.")
+    _session_secret()
+    _new_session(row["id"], response)
+    return {"user": {"id": row["id"], "email": row["email"]}}
+
+@app.get("/api/account/me")
+def account_me(request: Request):
+    return {"user": _current_user(request)}
+
+@app.post("/api/account/logout")
+def account_logout(request: Request, response):
+    token = request.cookies.get(_SESSION_COOKIE)
+    if token:
+        with _account_db() as conn:
+            conn.execute("DELETE FROM sessions WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
+    response.delete_cookie(_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return {"ok": True}
+
+@app.get("/api/matters")
+def list_cloud_matters(request: Request):
+    user = _current_user(request)
+    with _account_db() as conn:
+        rows = conn.execute("SELECT payload FROM matters WHERE user_id=? ORDER BY updated_at DESC", (user["id"],)).fetchall()
+    return {"matters": [json.loads(row["payload"]) for row in rows]}
+
+@app.put("/api/matters/{matter_id}")
+def save_cloud_matter(matter_id: str, body: MatterPayload, request: Request):
+    user = _current_user(request)
+    if matter_id != body.id:
+        raise HTTPException(422, "Matter id does not match the request path.")
+    if len(json.dumps(body.data, ensure_ascii=False)) > 100_000:
+        raise HTTPException(413, "Matter record is too large.")
+    now = datetime.now(timezone.utc).isoformat()
+    payload = json.dumps({"id": body.id, **body.data}, ensure_ascii=False)
+    with _account_db() as conn:
+        conn.execute("""INSERT INTO matters(id,user_id,payload,created_at,updated_at) VALUES(?,?,?,?,?)
+          ON CONFLICT(user_id,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at""",
+          (body.id, user["id"], payload, now, now))
+    return {"ok": True, "id": body.id}
+
+@app.delete("/api/matters/{matter_id}")
+def delete_cloud_matter(matter_id: str, request: Request):
+    user = _current_user(request)
+    with _account_db() as conn:
+        conn.execute("DELETE FROM matters WHERE user_id=? AND id=?", (user["id"], matter_id))
+    return {"ok": True}
+
+
+
 # Best-effort per-process protection for paid court-data provider routes.
 # Use a shared store (e.g. Redis) before scaling to multiple replicas.
 _COURT_RATE_LIMIT_LOCK = threading.Lock()
