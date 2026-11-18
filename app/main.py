@@ -709,6 +709,164 @@ def court_directory_courts(state: str, district_code: str, complex_code: str):
     return _ecourtsindia_partner_get(path)
 
 
+
+# Native eCourts workspace APIs. All provider calls stay server-side; credentials never reach the browser.
+def _ecourtsindia_data_get(path: str, query: dict | None = None):
+    token = os.getenv("ECOURTSINDIA_PARTNER_API_KEY", "").strip()
+    if not token:
+        raise HTTPException(503, "Live court data is not configured. Set the partner API key in Railway Variables.")
+    allowed = (
+        "/api/partner/case/",
+        "/api/partner/search",
+        "/api/partner/causelist/",
+        "/api/partner/enums",
+    )
+    if not path.startswith(allowed):
+        raise HTTPException(400, "Unsupported court-data request.")
+    from urllib.parse import urlencode
+    base = os.getenv("ECOURTSINDIA_API_BASE_URL", "https://webapi.ecourtsindia.com").rstrip("/")
+    url = base + path
+    if query:
+        pairs = []
+        for key, value in query.items():
+            if value is None or value == "":
+                continue
+            if isinstance(value, list):
+                pairs.extend((key, str(item)) for item in value if str(item))
+            else:
+                pairs.append((key, str(value)))
+        if pairs:
+            url += "?" + urlencode(pairs)
+    request = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + token,
+        "Accept": "application/json",
+        "User-Agent": "BharatLegal-AI/0.4"
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            raw = response.read(12 * 1024 * 1024 + 1)
+        if len(raw) > 12 * 1024 * 1024:
+            raise HTTPException(502, "Court-data response exceeded the safe size limit.")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, (dict, list)):
+            raise ValueError("Unexpected provider response")
+        return payload
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise HTTPException(502, "Court-data provider rejected the configured token. Check its validity and permissions.")
+        if exc.code == 404:
+            raise HTTPException(404, "No matching court record was found by the data provider.")
+        if exc.code == 429:
+            raise HTTPException(503, "Court-data provider rate limit reached. Retry later.")
+        raise HTTPException(502, "Court-data provider returned an upstream error.")
+    except urllib.error.URLError:
+        raise HTTPException(503, "Court-data provider is temporarily unavailable.")
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(502, "Court-data provider returned invalid data.")
+
+
+@app.get("/api/courts/data-status")
+def court_data_status():
+    return {
+        "configured": bool(os.getenv("ECOURTSINDIA_PARTNER_API_KEY", "").strip()),
+        "provider": "eCourtsIndia partner API",
+        "provider_type": "Independent third-party data provider; not a Government of India API",
+        "available_modules": ["case-detail", "case-search", "cause-list", "available-dates", "court-structure", "order-ai"],
+        "official_portal": "https://services.ecourts.gov.in/ecourtindia_v6/"
+    }
+
+
+@app.get("/api/courts/case/{cnr}")
+def court_case_detail(cnr: str):
+    import re
+    cnr = cnr.strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Enter a valid 16-character CNR (4 letters followed by 12 digits).")
+    return _ecourtsindia_data_get("/api/partner/case/" + cnr)
+
+
+@app.get("/api/courts/search")
+def court_case_search(
+    query: str = "",
+    litigant: str = "",
+    advocate: str = "",
+    judge: str = "",
+    state: str = "",
+    case_status: str = "",
+    page: int = 1,
+    page_size: int = 20,
+):
+    if not any((query.strip(), litigant.strip(), advocate.strip(), judge.strip())):
+        raise HTTPException(422, "Enter a search term, litigant, advocate or judge.")
+    if len(query) > 180 or len(litigant) > 120 or len(advocate) > 120 or len(judge) > 120:
+        raise HTTPException(422, "Search terms are too long.")
+    page = max(1, min(page, 10000))
+    page_size = max(1, min(page_size, 50))
+    params = {"query": query.strip(), "litigants": litigant.strip(), "advocates": advocate.strip(),
+              "judges": judge.strip(), "caseStatus": case_status.strip().upper() or None,
+              "page": page, "pageSize": page_size}
+    if state:
+        params["stateCodes"] = state[:12]
+    return _ecourtsindia_data_get("/api/partner/search", params)
+
+
+@app.get("/api/courts/causelist")
+def court_cause_list(
+    query: str = "",
+    date: str = "",
+    state: str = "",
+    district_code: str = "",
+    complex_code: str = "",
+    court: str = "",
+    court_no: str = "",
+    judge: str = "",
+    advocate: str = "",
+    litigant: str = "",
+    list_type: str = "",
+    offset: int = 0,
+    limit: int = 50,
+):
+    params = {"q": query.strip(), "date": date or None, "state": state or None,
+              "districtCode": district_code or None, "courtComplexCode": complex_code or None,
+              "court": court or None, "courtNo": court_no or None, "judge": judge or None,
+              "advocate": advocate or None, "litigant": litigant or None,
+              "listType": list_type.upper() or None, "offset": max(0, min(offset, 100000)),
+              "limit": max(1, min(limit, 200)), "includeCourtroom": "true"}
+    if not any(params.get(k) for k in ("q", "date", "state", "districtCode", "courtComplexCode", "court", "courtNo", "judge", "advocate", "litigant")):
+        raise HTTPException(422, "Choose a date, court or enter a search term.")
+    return _ecourtsindia_data_get("/api/partner/causelist/search", params)
+
+
+@app.get("/api/courts/available-dates")
+def court_available_dates(state: str = "", district_code: str = "", complex_code: str = "", court: str = "", court_no: str = ""):
+    params = {"state": state or None, "districtCode": district_code or None,
+              "courtComplexCode": complex_code or None, "court": court or None, "courtNo": court_no or None}
+    if not any(params.values()):
+        raise HTTPException(422, "Select at least one court-location filter.")
+    return _ecourtsindia_data_get("/api/partner/causelist/available-dates", params)
+
+
+@app.get("/api/courts/search-capabilities")
+def court_search_capabilities():
+    return _ecourtsindia_data_get("/api/partner/search/capabilities")
+
+
+@app.get("/api/courts/enums")
+def court_enums():
+    return _ecourtsindia_data_get("/api/partner/enums")
+
+
+@app.get("/api/courts/case/{cnr}/order-ai/{filename}")
+def court_order_ai(cnr: str, filename: str):
+    import re
+    cnr = cnr.strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Invalid CNR.")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}\\.pdf", filename):
+        raise HTTPException(422, "Invalid order filename.")
+    return _ecourtsindia_data_get("/api/partner/case/" + cnr + "/order-ai/" + filename)
+
+
 @app.get("/api/draft/requirements")
 def draft_requirements(document_type: str, jurisdiction: str):
     """Return a drafting intake checklist, not a statement of prescribed court forms or local filing rules."""
