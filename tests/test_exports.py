@@ -132,6 +132,45 @@ class DraftWorkflowTests(unittest.TestCase):
             ))
         self.assertEqual(caught.exception.status_code, 400)
 
+
+    def test_document_specific_legal_notice_structure_is_in_prompt(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model", return_value="Draft") as model:
+            draft(DraftRequest(
+                document_type="Legal notice",
+                facts="A supplier failed to deliver goods.",
+                jurisdiction="Maharashtra",
+                language="English"
+            ))
+        prompt = model.call_args.args[0]
+        self.assertIn("sender and recipient", prompt)
+        self.assertIn("response period only if supplied or independently verified", prompt)
+        self.assertIn("without making unsupported threats", prompt)
+
+    def test_affidavit_template_distinguishes_personal_knowledge(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model", return_value="Draft") as model:
+            draft(DraftRequest(
+                document_type="Affidavit",
+                facts="The deponent witnessed the event.",
+                jurisdiction="India (Central jurisdiction)",
+                language="English"
+            ))
+        prompt = model.call_args.args[0]
+        self.assertIn("personal knowledge from information/belief", prompt)
+        self.assertIn("do not claim an affidavit is validly sworn", prompt)
+
+    def test_unknown_document_type_uses_safe_generic_structure(self):
+        from unittest.mock import patch
+        with patch("app.main.ask_model", return_value="Draft") as model:
+            draft(DraftRequest(
+                document_type="Unlisted document",
+                facts="Prepare a short record.",
+                jurisdiction="Maharashtra",
+                language="English"
+            ))
+        self.assertIn("without inventing prescribed forms", model.call_args.args[0])
+
     def test_draft_requires_facts(self):
         with self.assertRaises(HTTPException) as caught:
             draft(DraftRequest(
