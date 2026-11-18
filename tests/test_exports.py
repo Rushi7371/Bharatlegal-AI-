@@ -171,6 +171,21 @@ class DraftWorkflowTests(unittest.TestCase):
             ))
         self.assertIn("without inventing prescribed forms", model.call_args.args[0])
 
+
+    def test_maharashtra_court_selector_uses_official_directory_links(self):
+        from pathlib import Path
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        self.assertIn("services.ecourts.gov.in/ecourtindia_v6", workspace)
+        self.assertIn("bombayhighcourt.gov.in/bhc/jurisdiction", workspace)
+        self.assertIn("mhBenchByDistrict", workspace)
+        self.assertIn("These are court levels / categories, not a live list", workspace)
+
+    def test_maharashtra_district_without_published_bench_mapping_is_not_guessed(self):
+        from pathlib import Path
+        workspace = (Path(__file__).resolve().parents[1] / "static" / "workspace.html").read_text(encoding="utf-8")
+        self.assertIn("'Hingoli'", workspace)
+        self.assertIn("The official High Court jurisdiction page does not explicitly list this district", workspace)
+
     def test_draft_requires_facts(self):
         with self.assertRaises(HTTPException) as caught:
             draft(DraftRequest(
