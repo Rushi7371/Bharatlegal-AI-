@@ -26,6 +26,11 @@ from app.main import (
     court_directory_complexes,
     court_directory_courts,
     _ecourtsindia_partner_get,
+    court_case_detail,
+    court_case_search,
+    court_cause_list,
+    court_available_dates,
+    court_order_ai,
 )
 
 
@@ -412,6 +417,60 @@ class TranslationPipelineTests(unittest.TestCase):
                 )
         self.assertEqual(caught.exception.status_code, 422)
         model.assert_not_called()
+
+
+
+class NativeCourtWorkspaceApiTests(unittest.TestCase):
+    def test_case_detail_validates_cnr_and_uses_server_side_provider(self):
+        from unittest.mock import patch
+        payload = {"data": {"courtCaseData": {"cnr": "ABCD010000012024"}}}
+        with patch("app.main._ecourtsindia_data_get", return_value=payload) as provider:
+            self.assertEqual(court_case_detail("abcd010000012024"), payload)
+        provider.assert_called_once_with("/api/partner/case/ABCD010000012024")
+        with self.assertRaises(HTTPException) as caught:
+            court_case_detail("NOT-A-CNR")
+        self.assertEqual(caught.exception.status_code, 422)
+
+    def test_case_search_requires_a_term_and_caps_page_size(self):
+        from unittest.mock import patch
+        with self.assertRaises(HTTPException) as caught:
+            court_case_search()
+        self.assertEqual(caught.exception.status_code, 422)
+        with patch("app.main._ecourtsindia_data_get", return_value={"data": {}}) as provider:
+            court_case_search(query="contract", page=0, page_size=500)
+        self.assertEqual(provider.call_args.args[0], "/api/partner/search")
+        self.assertEqual(provider.call_args.args[1]["page"], 1)
+        self.assertEqual(provider.call_args.args[1]["pageSize"], 50)
+
+    def test_cause_list_requires_filter_and_limits_pagination(self):
+        from unittest.mock import patch
+        with self.assertRaises(HTTPException) as caught:
+            court_cause_list()
+        self.assertEqual(caught.exception.status_code, 422)
+        with patch("app.main._ecourtsindia_data_get", return_value={"data": {"results": []}}) as provider:
+            court_cause_list(date="2026-11-19", offset=-5, limit=999)
+        params = provider.call_args.args[1]
+        self.assertEqual(params["offset"], 0)
+        self.assertEqual(params["limit"], 200)
+        self.assertEqual(params["date"], "2026-11-19")
+
+    def test_available_dates_requires_a_location_filter(self):
+        from unittest.mock import patch
+        with self.assertRaises(HTTPException) as caught:
+            court_available_dates()
+        self.assertEqual(caught.exception.status_code, 422)
+        with patch("app.main._ecourtsindia_data_get", return_value={"data": []}) as provider:
+            court_available_dates(state="MH")
+        self.assertEqual(provider.call_args.args[0], "/api/partner/causelist/available-dates")
+
+    def test_order_ai_rejects_path_injection(self):
+        from unittest.mock import patch
+        with self.assertRaises(HTTPException) as caught:
+            court_order_ai("ABCD010000012024", "../../secret")
+        self.assertEqual(caught.exception.status_code, 422)
+        with patch("app.main._ecourtsindia_data_get", return_value={"data": {}}) as provider:
+            court_order_ai("ABCD010000012024", "order-1.pdf")
+        self.assertEqual(provider.call_args.args[0], "/api/partner/case/ABCD010000012024/order-ai/order-1.pdf")
 
 
 if __name__ == "__main__":
