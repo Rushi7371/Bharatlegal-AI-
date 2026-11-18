@@ -981,4 +981,8 @@ def exams_page():
 def scanner_page():
     return FileResponse(BASE / "static" / "scanner.html")
 
+@app.get("/court-services", include_in_schema=False)
+def court_services_page():
+    return FileResponse(BASE / "static" / "court-services.html", headers={"Cache-Control": "no-store"})
+
 app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
