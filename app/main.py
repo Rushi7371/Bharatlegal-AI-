@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -11,6 +12,48 @@ BASE = Path(__file__).resolve().parent.parent
 _TRANSLATION_MODELS = {}
 _TRANSLATION_MODEL_LOCK = threading.Lock()
 app = FastAPI(title="BharatLegal AI", version="0.3.0", description="India-focused legal workflow assistant")
+
+# Best-effort per-process protection for paid court-data provider routes.
+# Use a shared store (e.g. Redis) before scaling to multiple replicas.
+_COURT_RATE_LIMIT_LOCK = threading.Lock()
+_COURT_RATE_LIMIT_EVENTS: dict[str, list[float]] = {}
+_COURT_RATE_LIMIT_PER_MINUTE = 30
+_COURT_RATE_LIMIT_PER_HOUR = 300
+
+def _court_rate_limit_check(client_ip: str, now: float | None = None) -> tuple[bool, int]:
+    current = __import__("time").time() if now is None else now
+    with _COURT_RATE_LIMIT_LOCK:
+        events = [stamp for stamp in _COURT_RATE_LIMIT_EVENTS.get(client_ip, []) if current - stamp < 3600]
+        minute_events = [stamp for stamp in events if current - stamp < 60]
+        if len(minute_events) >= _COURT_RATE_LIMIT_PER_MINUTE:
+            retry_after = max(1, int(60 - (current - minute_events[0])))
+            _COURT_RATE_LIMIT_EVENTS[client_ip] = events
+            return False, retry_after
+        if len(events) >= _COURT_RATE_LIMIT_PER_HOUR:
+            retry_after = max(1, int(3600 - (current - events[0])))
+            _COURT_RATE_LIMIT_EVENTS[client_ip] = events
+            return False, retry_after
+        events.append(current)
+        _COURT_RATE_LIMIT_EVENTS[client_ip] = events
+        return True, 0
+
+@app.middleware("http")
+async def protect_paid_court_data_routes(request: Request, call_next):
+    path = request.url.path
+    protected = path.startswith("/api/courts/") and path not in {
+        "/api/courts/data-status",
+        "/api/courts/structure/status",
+    }
+    if protected:
+        client_ip = request.client.host if request.client else "unknown"
+        allowed, retry_after = _court_rate_limit_check(client_ip)
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Court-data request limit reached. Please wait before trying again."},
+                headers={"Retry-After": str(retry_after)},
+            )
+    return await call_next(request)
 
 class ChatRequest(BaseModel):
     message: str
