@@ -861,6 +861,16 @@ def court_case_detail(cnr: str):
     return _ecourtsindia_data_get("/api/partner/case/" + cnr)
 
 
+@app.get("/api/courts/case/{cnr}/provisions")
+def court_case_provisions(cnr: str):
+    """Retrieve detailed statutory provisions cited in a case; provider may bill per distinct section."""
+    import re
+    cnr = cnr.strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}[0-9]{12}", cnr):
+        raise HTTPException(422, "Enter a valid 16-character CNR.")
+    return _ecourtsindia_data_get("/api/partner/case/" + cnr + "/provisions")
+
+
 @app.post("/api/courts/case/{cnr}/refresh")
 def court_case_refresh(cnr: str):
     """Queue an explicitly requested provider refresh; this may consume partner API credits."""
