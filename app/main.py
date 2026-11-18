@@ -344,11 +344,11 @@ def _detect_source_language(text: str) -> str:
     # Marathi-exclusive/common lexical and grammatical signals. This is only a
     # fast path for clear cases; mixed or ambiguous Devanagari is classified by AI.
     marathi_markers = re.findall(
-        r"\\b(?:आहे|आहेत|नाही|नाहीत|म्हणजे|माझ्या|आम्ही|तुम्ही|त्यांनी|यांनी|करण्यासाठी|झाले|झाली|होते|असते|कायदा|न्यायालयात|महाराष्ट्रातील)\\b",
+        r"\b(?:आहे|आहेत|नाही|नाहीत|म्हणजे|माझ्या|आम्ही|तुम्ही|त्यांनी|यांनी|करण्यासाठी|झाले|झाली|होते|असते|कायदा|न्यायालयात|महाराष्ट्रातील)\b",
         sample
     )
     hindi_markers = re.findall(
-        r"\\b(?:है|हैं|नहीं|था|थी|थे|करने|लिए|लेकिन|क्योंकि|आपका|हमारा|उसका|इसलिए|न्यायालय)\\b",
+        r"\b(?:है|हैं|नहीं|था|थी|थे|करने|लिए|लेकिन|क्योंकि|आपका|हमारा|उसका|इसलिए|न्यायालय)\b",
         sample
     )
     if len(marathi_markers) >= 2 and len(marathi_markers) > len(hindi_markers):
@@ -361,9 +361,9 @@ def _detect_source_language(text: str) -> str:
         "Identify the primary language of this Indian text. Choose exactly one label: "
         "English, Hindi, or Marathi. Distinguish Hindi from Marathi by vocabulary and "
         "grammar, not by script (both commonly use Devanagari). If mixed, choose the "
-        "dominant language. Return only the single label.\\n\\nTEXT:\\n" + sample
+        "dominant language. Return only the single label.\n\nTEXT:\n" + sample
     )
-    detected = ask_model(prompt, "English").strip().strip(" .\\\"'").lower()
+    detected = ask_model(prompt, "English").strip().strip(" .\\"'").lower()
     mapping = {"english": "English", "hindi": "Hindi", "marathi": "Marathi"}
     if detected not in mapping:
         raise HTTPException(503, "Could not reliably identify whether the Devanagari document is Hindi or Marathi. Select the source language manually and retry.")
