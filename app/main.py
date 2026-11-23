@@ -7,6 +7,7 @@ from pathlib import Path
 import os, io, json, base64, tempfile, threading, urllib.request, urllib.error
 from app.maharashtra_sources import load_catalogue, check_source
 from app.newsroom import router as newsroom_router
+from app.bhashini import router as bhashini_router
 
 BASE = Path(__file__).resolve().parent.parent
 _TRANSLATION_MODELS = {}
@@ -1584,6 +1585,7 @@ def mobile_redirect():
     return RedirectResponse(url="/mobile/", status_code=307)
 
 app.include_router(newsroom_router)
+app.include_router(bhashini_router)
 
 @app.get("/news", include_in_schema=False)
 def newsroom_page():
