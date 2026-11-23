@@ -83,7 +83,7 @@ def _get_pipeline(task: str, source: str, target: str | None = None) -> tuple[di
     if cached:
         return cached, user_id, api_key
     payload = {
-        "pipelineTasks": [{"taskType": task}],
+        "pipelineTasks": [_task_config(task, source, target)],
         "pipelineRequestConfig": {"pipelineId": pipeline_id}
     }
     config = _post_json(_CONFIG_URL, payload, {"userID": user_id, "ulcaApiKey": api_key})
